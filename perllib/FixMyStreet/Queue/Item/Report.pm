@@ -243,6 +243,15 @@ sub _send {
 sub _post_send {
     my ($self, $result) = @_;
 
+    # Record any errors, whether overall successful or not (if multiple senders, perhaps one failed)
+    my @errors;
+    for my $sender ( keys %{$self->reporters} ) {
+        unless ( $self->reporters->{ $sender }->success ) {
+            push @errors, $self->reporters->{ $sender }->error;
+        }
+    }
+    $self->report->update_send_failed( join( '|', @errors ) );
+
     my $send_confirmation_email = $self->cobrand_handler->report_sent_confirmation_email($self->report);
     unless ($result) {
         $self->report->update( {
@@ -255,13 +264,6 @@ sub _post_send {
         }
         $self->log("Send successful");
     } else {
-        my @errors;
-        for my $sender ( keys %{$self->reporters} ) {
-            unless ( $self->reporters->{ $sender }->success ) {
-                push @errors, $self->reporters->{ $sender }->error;
-            }
-        }
-        $self->report->update_send_failed( join( '|', @errors ) );
         $self->log("Send failed");
     }
 }
