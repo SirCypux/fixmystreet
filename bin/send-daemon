@@ -6,6 +6,7 @@
 use strict;
 use warnings;
 use v5.14;
+$|++;
 
 BEGIN {
     use File::Basename qw(dirname);
@@ -22,6 +23,7 @@ use FixMyStreet::DB;
 use FixMyStreet::Script::Reports;
 use FixMyStreet::Queue::Item::Report;
 use Open311::PostServiceRequestUpdates;
+use Try::Tiny;
 
 my ($opts, $usage) = describe_options(
     '%c %o',
@@ -60,8 +62,14 @@ $pm->run_on_start(sub {
     $children{$pid} = time();
 });
 $pm->run_on_finish(sub {
-    my $pid = shift;
-    if ($children{$pid} > time() - 10) {
+    my ($pid, $child_exit_code) = @_;
+    say ('P: ', $pid, '. CXC: ', $child_exit_code);
+
+    if ($child_exit_code) {
+        # error, reap child processes 
+        kill 'TERM', keys %children;
+    }
+    elsif ($children{$pid} > time() - 10) {
         # It didn't live very long, let's wait a bit
         sleep(5);
     }
@@ -70,42 +78,75 @@ $pm->run_on_finish(sub {
 
 # The parent loop
 while (!$exit) {
+
     while (keys %children < $procs) {
         $pm->start and next;
+        warn 'just started ' . $$;
         srand;
         $SIG{USR1} = sub { ++$changeverboselevel; };
-        while (!$exit) {
+
+        # respond to any parent call to exit
+        $SIG{TERM} = sub {
+            warn "$$ exiting now due to parent reap";
+            $pm->finish;
+        };
+
+        while (!$exit) { 
             $0 = "fmsd (running queue)";
-            $db->txn_do(\&look_for_report);
-            $db->txn_do(\&look_for_update);
-            $0 = "fmsd";
+            my %row_tracking; 
+            try {
+                say 'trying';
+                $db->txn_do(\&look_for_report(\%row_tracking));
+                $db->txn_do(\&look_for_update);
+                $0 = "fmsd";
+            } catch {
+                warn "Error while attempting to send report or check for updates.\n$_";
+                $row_tracking{error} =~ s/.*("<.*>").*/$1/; # trim 
+                if (exists $row_tracking{row}) {
+                    try {
+                        $row_tracking{row}->update_send_failed($row_tracking{error} || 'unknown error');
+                    } catch {
+                        print_log('info', 'Could not record failure info after failing to send report.')
+                    };
+                }
+                $pm->finish(2); # error code 
+            };
             sleep(5 + rand(10));
         }
+        say 'finishing child proc';
         $pm->finish;
     }
-
+    say 'back in parent loop';
     if (!keys %children) { # Very high load, something wrong
+        say 'no keys in %children';
         sleep(10);
         next;
     }
-
+    say 'waiting for available procs...';
     $pm->wait_for_available_procs;
 }
 
 sub look_for_report {
+    my $row_hash = shift;   
     my $params = FixMyStreet::Script::Reports::construct_query($opts->debug);
     my $unsent = FixMyStreet::DB->resultset('Problem')->search($params, {
         for => \'UPDATE SKIP LOCKED',
         rows => 1,
     } )->single or return;
-
+    $row_hash->{row} = $unsent;
     print_log('debug', "Trying to send report " . $unsent->id);
-    my $item = FixMyStreet::Queue::Item::Report->new(
-        report => $unsent,
-        verbose => $verbose,
-        nomail => $opts->nomail,
-    );
-    $item->process;
+    try {
+        my $item = FixMyStreet::Queue::Item::Report->new(
+            report => $unsent,
+            verbose => $verbose,
+            nomail => $opts->nomail,
+        );
+        $item->process;
+    } catch {
+        print_log('info', "Failed to send report ", $unsent->id, "\n$_");
+        $row_hash->{error} = $_;
+        die $_; # rethrow to kill off sibling procs
+    };
 }
 
 sub look_for_update {

@@ -848,11 +848,21 @@ sub update_send_failed {
     my $self = shift;
     my $msg  = shift;
 
+    warn 'updating '; 
+    use Try::Tiny;
+    use DDP;
+    $ENV{DBIC_TRACE} = 1; 
+    $ENV{DBIC_TRACE_PROFILE} = 'console';
+    try {
+    p $self;
     $self->update( {
         send_fail_count => $self->send_fail_count + 1,
         send_fail_timestamp => \'current_timestamp',
         send_fail_reason => $msg
     } );
+    print "it worked!\n";
+    } catch { warn 'oops too ', $_};
+    $ENV{DBIC_TRACE} = 0;
 }
 
 =head2 updates_sent_to_body

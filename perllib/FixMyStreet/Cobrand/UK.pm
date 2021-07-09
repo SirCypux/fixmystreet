@@ -139,6 +139,16 @@ sub find_closest {
 
     ($lat, $lon) = map { Utils::truncate_coordinate($_) } $lat, $lon;
     my $j = mySociety::MaPit::call('nearest', "4326/$lon,$lat");
+
+=pod
+
+    $j = "<h1>Server Error (500)</h1>";  # XXX MOCK 
+    warn '*' x 40, "\n";                         # XXX MOCK 
+    warn 'SERVER ERROR TRIGGERED', "\n";          # XXX MOCK 
+    warn '*' x 40, "\n";                         # XXX MOCK 
+
+=cut
+
     if ($j->{postcode}) {
         $closest->{postcode} = $j->{postcode};
     }
