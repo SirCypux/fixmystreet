@@ -30,10 +30,10 @@
     [% ELSIF problem.bodies_str_ids.size == 0 %] [% loc('(not sent to council)') %]
     [% END %]
 [% END %]
-<div style='margin-top:0.25em'>
+<div class='assigned-to' style='margin-top:0.25em'>
 [%  IF c.user.has_permission_to('report_inspect', c.cobrand.body.id ) %] 
     [% IF problem.shortlisted_user %] [%# this report is on a shortlist %]
-        <span class="inline-text" for="assignment">[% loc('Assigned to:') %]</span>
+        <span class="inline-text assigned-to-label" for="assignment">[% loc('Assigned to:') %] </span>
         <strong>
         [% IF problem.shortlisted_user.name %]
             [% problem.shortlisted_user.name %]
@@ -42,7 +42,7 @@
         [% END %]
         </strong>
     [% ELSE %]
-        <strong> (unassigned)</strong>
+        <strong>(unassigned)</strong>
     [% END %]
 [% END %]
 </div>
