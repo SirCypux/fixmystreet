@@ -1,4 +1,4 @@
-[% IF c.user.has_permission_to('assign_report_to_user', c.cobrand.body.id) %]
+[% IF c.user.has_permission_to('assign_report_to_user', problem.bodies_str_ids) %]
     <p>
     <label for="assignment">[% loc('Assign to:') %]</label>
     <select class="form-control" name="assignment" id="assignment">

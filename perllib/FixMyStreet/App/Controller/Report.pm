@@ -523,7 +523,7 @@ sub inspect : Private {
 
         # set assignment 
         my $assigned = ($c->get_param('assignment'));
-        if ($assigned eq 'unassigned') {
+        if ($assigned && $assigned eq 'unassigned') {
             # take off shortlist...
             my $shortlisted = $problem->user_planned_reports->search({ removed => undef })->first;
             # ...(catching already unassigned)
