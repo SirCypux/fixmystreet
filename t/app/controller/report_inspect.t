@@ -50,7 +50,7 @@ $user->update( { from_body => $oxon } );
 
 my $sample_file = file(__FILE__)->parent->file("sample.jpg")->stringify;
 ok -e $sample_file, "sample file $sample_file exists";
-
+# goto HERE;
 FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
     ALLOWED_COBRANDS => 'fixmystreet',
@@ -671,13 +671,17 @@ FixMyStreet::override_config {
         my @assigned_to = $root->find('li#report-1 div.assigned-to strong')->content_list;
         like($assigned_to[0], qr/Inspector Ian/, 'report 1 assigned to Ian');
 
-        $mech->form_id('add_remove_shortlist_3');
-        $mech->click();
-        $mech->get_ok("/reports");
-
-        $root = HTML::TreeBuilder->new_from_content($mech->content());
-        @assigned_to = $root->find('li#report-3 div.assigned-to strong')->content_list;
-        like($assigned_to[0], qr/Body User/, 'assignment by shortlist-add buttons still works' );
+        my $toggle_shortlist = sub {
+            $mech->form_id('add_remove_shortlist_3');
+            $mech->click();
+            $mech->get_ok("/reports");
+            $root = HTML::TreeBuilder->new_from_content($mech->content());
+            @assigned_to = $root->find('li#report-3 div.assigned-to strong')->content_list;
+        };
+        $toggle_shortlist->();
+        like($assigned_to[0], qr/Body User/, 'assignment by shortlist-add button still works' );
+        $toggle_shortlist->();
+        like($assigned_to[0], qr/unassigned/, 'unassignment by shortlist-remove button still works' );
     };
 };
 
@@ -711,6 +715,7 @@ foreach my $test (
 
             $report->discard_changes;
             like $report->get_extra_metadata('detailed_information'), qr/XXX164XXX/, 'detailed information saved';
+            $mech->get_ok("/report/$report_id");
             $mech->content_lacks('limited to 164 characters', "164 charcters of detailed information ok");
             $mech->content_contains('XXX164XXX', "Detailed information field contains submitted text");
 
@@ -760,7 +765,7 @@ FixMyStreet::override_config {
         $report_edit_permission->delete;
     };
 };
-
+HERE:
 FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
     ALLOWED_COBRANDS => 'oxfordshire',
@@ -790,6 +795,7 @@ FixMyStreet::override_config {
           photo3 => '',
         };
         my $values = $mech->visible_form_values('report_inspect_form');
+        diag 'VFV: ', explain ($values); 
         is_deeply $values, $expected_fields, 'correct form fields present';
 
         $mech->submit_form(button => 'save', with_fields => { category => 'Badgers & Voles', priority => $rp2->id });
@@ -847,7 +853,7 @@ FixMyStreet::override_config {
         is $report->comments->first->confirmed, $now;
     };
 };
-
+done_testing;exit;
 FixMyStreet::override_config {
     ALLOWED_COBRANDS => [ 'oxfordshire', 'fixmystreet' ],
     BASE_URL => 'http://fixmystreet.site',
