@@ -639,18 +639,18 @@ FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
     ALLOWED_COBRANDS => 'oxfordshire',
 }, sub {
-    subtest "test report assignment" => sub {
-        my $ian = $mech->create_user_ok('inspector@example.com', name => 'Inspector Ian');
-        $ian->from_body( $oxon->id );
-        $ian->user_body_permissions->create( {
-            body => $oxon,
-            permission_type => 'inspect_report',
-        } );
-        $ian->update;
-        $user->user_body_permissions->create({ body => $oxon, permission_type => 'assign_report_to_user' });
-        $user->user_body_permissions->create({ body => $oxon, permission_type => 'inspect_report' });
-        $user->update( { from_body => $oxon } );
-        $user->update({is_superuser => 1});
+
+    my $ian = $mech->create_user_ok('inspector@example.com', name => 'Inspector Ian', from_body => $oxon);
+    $user->user_body_permissions->create({ 
+        body => $oxon, 
+        permission_type => ['assign_report_to_user', 'inspect_report'] 
+    });
+    $user->update({ from_body => $oxon });
+    $user->update({ is_superuser => 1 });
+    $ian->user_body_permissions->create( { body => $oxon, permission_type => 'inspect_report', } );
+    $ian->update;
+
+    subtest "assign report by dropdown in report page" => sub {
         $mech->get_ok("/report/$report_id");
         $mech->content_contains('Assign to:');
         $mech->content_contains('<select class="form-control" name="assignment" id="assignment">');
@@ -658,9 +658,26 @@ FixMyStreet::override_config {
         $mech->get_ok("/report/$report_id");
         $mech->content_lacks('Shortlisted by');
         $mech->submit_form_ok({ button => 'save', with_fields => { include_update => 0, assignment => $ian->id } });
-        my $page = $mech->content();
-        my $root = HTML::TreeBuilder->new_from_content($page);
         $mech->content_contains('Shortlisted by Inspector Ian');
+    };
+
+    subtest "reports list shows assignees' names" => sub {
+        $mech->get_ok("/reports");
+
+        use HTML::Selector::Element qw(find);
+        my $root = HTML::TreeBuilder->new_from_content($mech->content());
+
+        $mech->content_contains('unassigned');
+        my @assigned_to = $root->find('li#report-1 div.assigned-to strong')->content_list;
+        like($assigned_to[0], qr/Inspector Ian/, 'report 1 assigned to Ian');
+
+        $mech->form_id('add_remove_shortlist_3');
+        $mech->click();
+        $mech->get_ok("/reports");
+
+        $root = HTML::TreeBuilder->new_from_content($mech->content());
+        @assigned_to = $root->find('li#report-3 div.assigned-to strong')->content_list;
+        like($assigned_to[0], qr/Body User/, 'assignment by shortlist-add buttons still works' );
     };
 };
 
