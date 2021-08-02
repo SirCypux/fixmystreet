@@ -46,7 +46,9 @@ END;
 <li class="item-list__item item-list--reports__item [% item_extra_class %]"
     data-report-id="[% problem.id | html %]" data-lastupdate="[% problem.lastupdate %]" id="report-[% problem.id | html %]">
 [% IF relevant_staff AND (c.user.has_permission_to('assign_report_to_user', problem.bodies_str_ids)) %]
-<input type='checkbox' class='bulk-assign' name='bulk-assign-reports' form='bulk-assign-form' value='[%- problem.id -%]' style='float:right; margin:2em'>
+    [% UNLESS ((c.req.uri.path.match('\/my\/')) OR  (c.req.uri.path.match('\/around'))) %]
+        <input type='checkbox' class='bulk-assign' name='bulk-assign-reports' form='bulk-assign-form' value='[%- problem.id -%]' style='float:right; margin:2em'>
+    [% END %]
 [% END %]
 <a href="[% c.cobrand.relative_url_for_report( problem ) %][% problem.url %]">
   [% TRY ~%]
