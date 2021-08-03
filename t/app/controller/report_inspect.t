@@ -639,24 +639,23 @@ FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
     ALLOWED_COBRANDS => 'oxfordshire',
 }, sub {
-
     my $ian = $mech->create_user_ok('inspector@example.com', name => 'Inspector Ian', from_body => $oxon);
-    $user->user_body_permissions->create({ 
-        body => $oxon, 
-        permission_type => ['assign_report_to_user', 'inspect_report'] 
-    });
-    $user->update({ from_body => $oxon });
-    $user->update({ is_superuser => 1 });
-    $ian->user_body_permissions->create( { body => $oxon, permission_type => 'inspect_report', } );
+    $user->user_body_permissions->create({ body => $oxon, permission_type => 'assign_report_to_user' });
+    $user->user_body_permissions->create({ body => $oxon, permission_type => 'planned_reports' });
+    $user->update;
+    $ian->user_body_permissions->create({ body => $oxon, permission_type => 'report_inspect' });
+    $ian->user_body_permissions->create({ body => $oxon, permission_type => 'planned_reports' });
     $ian->update;
 
     subtest "assign report by dropdown in report page" => sub {
         $mech->get_ok("/report/$report_id");
         $mech->content_contains('Assign to:');
         $mech->content_contains('<select class="form-control" name="assignment" id="assignment">');
+
         $mech->submit_form_ok({ button => 'save', with_fields => { include_update => 0, assignment => 'unassigned' } });
         $mech->get_ok("/report/$report_id");
         $mech->content_lacks('Shortlisted by');
+
         $mech->submit_form_ok({ button => 'save', with_fields => { include_update => 0, assignment => $ian->id } });
         $mech->content_contains('Shortlisted by Inspector Ian');
     };
@@ -794,13 +793,6 @@ FixMyStreet::override_config {
           photo1 => '',
           photo2 => '',
           photo3 => '',
-          assignment => '3',
-          defect_item_category => '',
-          defect_item_detail => '',
-          defect_item_type => '',
-          defect_location_description => '',
-          raise_defect => undef,
-          traffic_information => '',
         };
         my $values = $mech->visible_form_values('report_inspect_form');
         is_deeply $values, $expected_fields, 'correct form fields present';
