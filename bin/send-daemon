@@ -63,7 +63,7 @@ $pm->run_on_start(sub {
 });
 $pm->run_on_finish(sub {
     my ($pid, $child_exit_code) = @_;
-    say ('P: ', $pid, '. CXC: ', $child_exit_code);
+    warn ('P: ', $pid, '. CXC: ', $child_exit_code);
 
     if ($child_exit_code) {
         # error, reap child processes 
@@ -91,17 +91,19 @@ while (!$exit) {
             $pm->finish;
         };
 
-        while (!$exit) { 
+        while (!$exit) {
             $0 = "fmsd (running queue)";
-            my %row_tracking; 
+            my %row_tracking;
             try {
-                say 'trying';
-                $db->txn_do(\&look_for_report(\%row_tracking));
+                print_log('info', 'looking for reports');
+                $db->txn_do(\&look_for_report, \%row_tracking);
+                print_log('info', 'looking for updates');
                 $db->txn_do(\&look_for_update);
                 $0 = "fmsd";
             } catch {
                 warn "Error while attempting to send report or check for updates.\n$_";
-                $row_tracking{error} =~ s/.*("<.*>").*/$1/; # trim 
+                # trim HTML error
+                $row_tracking{error} =~ s/.*("<.*>").*/$1/;
                 if (exists $row_tracking{row}) {
                     try {
                         $row_tracking{row}->update_send_failed($row_tracking{error} || 'unknown error');
@@ -109,7 +111,7 @@ while (!$exit) {
                         print_log('info', 'Could not record failure info after failing to send report.')
                     };
                 }
-                $pm->finish(2); # error code 
+                $pm->finish(2); # error code
             };
             sleep(5 + rand(10));
         }
