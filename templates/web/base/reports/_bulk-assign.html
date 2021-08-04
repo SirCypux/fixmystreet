@@ -3,18 +3,7 @@
     <label style='font-weight:normal;font-size:small;display:inline;vertical-align:sub;'>Assign to:</label>
     <input type="hidden" name="token" value="[% csrf_token %]">
     <select class="form-control multi-select-button" name="inspector" id="inspector" style="height:1.8em;font-size:0.75em;display:inline;padding:0;">
-        [% FOR user IN c.cobrand.users %]
-            [% IF user.has_permission_to('report_inspect', c.cobrand.body.id ) AND NOT user.is_superuser %]
-                <option value='[% user.id %]'>
-                [% IF user.name %]
-                    [% user.name %]
-                [% ELSE %]
-                    [% user.username %]
-                [% END %]
-                </option>
-            [% END %]
-        [% END %]
-        <option value='unassigned'>unassigned</option>
+        [% INCLUDE 'report/inspect/_assignment-options.html' %]
     </select>
     <button id='bulk-assign-btn' class='btn' type='submit' name='bulk-assign-btn' value='bulk-assign' 
         style='font-weight:normal;font-size:0.75em;height:2em;vertical-align:bottom;margin-bottom:0.5em'>Assign</button>
