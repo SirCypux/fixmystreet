@@ -2,6 +2,7 @@ use FixMyStreet::TestMech;
 use Test::MockModule;
 use Path::Class;
 
+use HTML::Selector::Element qw(find);
 use Test::WWW::Mechanize::Catalyst;
 my $mech = FixMyStreet::TestMech->new;
 my $oxon = $mech->create_body_ok(2237, 'Oxfordshire County Council', { can_be_devolved => 1 } );
@@ -42,7 +43,6 @@ FixMyStreet::override_config {
         $mech->get_ok("/reports");
         $mech->content_contains('Assign to:');
 
-        use HTML::Selector::Element qw(find);
         my $root = HTML::TreeBuilder->new_from_content($mech->content());
         ok ($root->find('select#inspector'), 'Inspector assignment dropdown exists');
         ok ($root->find('input.bulk-assign'), 'Inspector assignment checkboxes exist');
@@ -67,6 +67,8 @@ FixMyStreet::override_config {
                 value => $box->attr('value'),
             });
         }
+
+        $mech->select('inspector', $ian->id);
         $mech->tick('bulk-assign-reports', $report_id);
         $mech->tick('bulk-assign-reports', $report2_id);
         $mech->tick('bulk-assign-reports', $report3_id);
