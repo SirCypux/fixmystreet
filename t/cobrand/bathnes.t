@@ -220,7 +220,60 @@ subtest 'extra CSV columns are present if permission granted' => sub {
         'Column headers look correct';
 };
 
+subtest 'report a problem link post-report is not location-specific' => sub {
+        $mech->log_in_ok( $normaluser->email );
 
+        use Test::More;
+        can_ok('FixMyStreet::Cobrand::BathNES', 'post_report_report_problem_link');
+        # is_deeply($cobrand->post_report_report_problem_link, \{
+        #     uri => '',
+        #     label => 'Report a problem',
+        #     attrs => 'class="report-a-problem-btn"',
+        # }, 'hash output of post_report_report_problem_link is ok');
+
+        $mech->get_ok('/report/new?longitude=-2.353633&latitude=51.380349#user');
+        my ($csrf) = $mech->content =~ /name="token" value="([^"]*)"/;
+        $mech->post( '/report/new',
+            Content_Type => 'form-data',
+            Content =>
+            {
+            submit_problem => 1,
+            token => $csrf,
+            title         => 'Test',
+            lat => 51.391260, lon => -2.364792,
+            pc            => 'Lansdown Grove',
+            detail        => 'Detail',
+            photo1        => '',
+            photo2        => '',
+            photo3        => '',
+            name          => 'Normal User',
+            may_show_name => '1',
+            email         => 'test@example.com',
+            phone         => '',
+            category      => 'Dog fouling',
+            #
+            zoom          => '3', 'status', 'open', sort => 'created_desc',
+            service => 'desktop', form_as => 'myself', submit_register => 'submit'
+
+            }
+        );
+        ok $mech->success, 'Successfully posted report';
+        $mech->base_like(qr(/report/new$), 'expected redirect back to /report/new');
+
+        my $tree = HTML::TreeBuilder->new_from_content($mech->content());
+        my $report_link = $tree->look_down(
+            '_tag' => 'li',
+            'class' => 'navigation-primary-list__item',
+        )->look_down(
+            '_tag' => 'a',
+            'class' => 'report-a-problem-btn'
+        );
+
+        is ($report_link->as_text, 'Report a problem', 'RAP link has correct text');
+        is ($report_link->attr('href', q[]), 'href should be blank (i.e. rel link to /report/new)');
+        my @rap_link = $mech->find_all_links(text => 'Report a problem');
+        ok (scalar(@rap_link) == 1, 'should only be one RAP link');
+    }
 };
 
 subtest 'check cobrand correctly reset on each request' => sub {
