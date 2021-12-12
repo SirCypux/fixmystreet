@@ -7,10 +7,6 @@ BEGIN { extends 'FixMyStreet::SendReport'; }
 
 use Open311;
 
-has open311_test_req_used => (
-    is => 'rw',
-);
-
 sub send {
     my $self = shift;
     my ( $row, $h ) = @_;
@@ -71,15 +67,6 @@ sub send {
 
         $row->set_extra_fields( @$extra ) if @$extra;
 
-        if (FixMyStreet->test_mode) {
-            my $test_res = HTTP::Response->new();
-            $test_res->code(200);
-            $test_res->message('OK');
-            $test_res->content('<?xml version="1.0" encoding="utf-8"?><service_requests><request><service_request_id>248</service_request_id></request></service_requests>');
-            $open311_params{test_mode} = 1;
-            $open311_params{test_get_returns} = { 'requests.xml' => $test_res };
-        }
-
         my $open311 = Open311->new( %open311_params );
 
         my $skip = $cobrand->call_hook(open311_pre_send => $row, $open311);
@@ -88,9 +75,6 @@ sub send {
         my $resp;
         if (!$skip) {
             $resp = $open311->send_service_request( $row, $h, $contact->email );
-            if (FixMyStreet->test_mode) {
-                $self->open311_test_req_used($open311->test_req_used);
-            }
         }
 
         # make sure we don't save extra changes from above
@@ -106,7 +90,7 @@ sub send {
             $self->error( $self->error . "\n" . $open311->error );
         }
 
-        $cobrand->call_hook(open311_post_send => $row, $h, $contact);
+        $cobrand->call_hook(open311_post_send => $row, $h, $self);
     }
 
 

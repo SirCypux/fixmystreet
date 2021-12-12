@@ -153,7 +153,7 @@ sub categories_restriction {
     # send_method set to 'Email::BathNES' (to use a custom template) which must
     # be show on the cobrand.
     return $rs->search( { -or => [
-        'me.send_method' => undef, # Open311 categories, or Highways England
+        'me.send_method' => undef, # Open311 categories, or National Highways
         'me.send_method' => '', # Open311 categories that have been edited in the admin
         'me.send_method' => 'Email::BathNES', # Street Light Fault
         'me.send_method' => 'Blackhole', # Parks categories
@@ -218,6 +218,15 @@ sub dashboard_export_problems_add_columns {
             attribute_data => $attribute_data,
         };
     });
+}
+
+sub post_report_report_problem_link {
+    return {
+        uri => '/',
+        label => 'Report a problem',
+        attrs => 'class="report-a-problem-btn"',
+    };
+
 }
 
 1;

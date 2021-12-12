@@ -6,6 +6,7 @@ use warnings;
 
 use Moo;
 with 'FixMyStreet::Roles::ConfirmValidation';
+with 'FixMyStreet::Roles::Open311Alloy';
 
 sub council_area_id { 2234 }
 sub council_area { 'Northamptonshire' }
@@ -27,7 +28,7 @@ sub disambiguate_location {
 
 sub categories_restriction {
     my ($self, $rs) = @_;
-    return $rs->search( { 'body.name' => [ $self->council_name, 'Highways England' ] } );
+    return $rs->search( { 'body.name' => [ $self->council_name, 'National Highways' ] } );
 }
 
 sub send_questionnaires { 0 }
@@ -78,26 +79,6 @@ sub get_geocoder { 'OSM' }
 
 sub map_type { 'Northamptonshire' }
 
-sub open311_config {
-    my ($self, $row, $h, $params) = @_;
-
-    $params->{multi_photos} = 1;
-}
-
-sub open311_extra_data_include {
-    my ($self, $row, $h) = @_;
-
-    return [
-        { name => 'report_url',
-          value => $h->{url} },
-        { name => 'title',
-          value => $row->title },
-        { name => 'description',
-          value => $row->detail },
-        { name => 'category',
-          value => $row->category },
-    ];
-}
 sub open311_extra_data_exclude { [ 'emergency' ] }
 
 sub open311_get_update_munging {

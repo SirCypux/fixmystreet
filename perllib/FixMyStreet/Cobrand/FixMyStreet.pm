@@ -69,6 +69,12 @@ sub munge_around_category_where {
     if ($bromley) {
         $where->{extra} = [ undef, { -not_like => '%Waste%' } ];
     }
+
+    my $pboro = grep { $_->name eq 'Peterborough City Council' } @{ $self->{c}->stash->{around_bodies} };
+    if ($pboro) {
+        my $pboro = FixMyStreet::Cobrand::Peterborough->new({ c => $self->{c} });
+        $pboro->munge_around_category_where($where);
+    }
 }
 
 sub _iow_category_munge {
@@ -93,6 +99,11 @@ sub munge_reports_category_list {
     if ( $bodies{'Bromley Council'} ) {
         @$categories = grep { grep { $_ ne 'Waste' } @{$_->groups} } @$categories;
     }
+
+    if ( $bodies{'Peterborough City Council'} ) {
+        my $pboro = FixMyStreet::Cobrand::Peterborough->new({ c => $self->{c} });
+        $pboro->munge_reports_category_list($categories);
+    }
 }
 
 sub munge_reports_area_list {
@@ -114,13 +125,13 @@ sub munge_report_new_bodies {
         $tfl->munge_surrounding_london($bodies);
     }
 
-    if ( $bodies{'Highways England'} ) {
+    if ( $bodies{'National Highways'} ) {
         my $c = $self->{c};
         my $he = FixMyStreet::Cobrand::HighwaysEngland->new({ c => $c });
         my $on_he_road = $c->stash->{on_he_road} = $he->report_new_is_on_he_road;
 
         if (!$on_he_road) {
-            %$bodies = map { $_->id => $_ } grep { $_->name ne 'Highways England' } values %$bodies;
+            %$bodies = map { $_->id => $_ } grep { $_->name ne 'National Highways' } values %$bodies;
         }
     }
 }
@@ -143,6 +154,10 @@ sub munge_report_new_contacts {
         # Presented categories vary if we're on/off a red route
         my $tfl = FixMyStreet::Cobrand->get_class_for_moniker( 'tfl' )->new({ c => $self->{c} });
         $tfl->munge_red_route_categories($contacts);
+    }
+    if ( $bodies{'Peterborough City Council'} ) {
+        my $pboro = FixMyStreet::Cobrand::Peterborough->new({ c => $self->{c} });
+        $pboro->munge_report_new_contacts($contacts);
     }
 
 }
@@ -413,5 +428,12 @@ around 'munge_sendreport_params' => sub {
 
     $row->areas($original_areas);
 };
+
+sub reopening_disallowed {
+    my ($self, $problem) = @_;
+    my $c = $self->{c};
+    return 1 if $problem->to_body_named("Merton") && $c->user_exists && (!$c->user->from_body || $c->user->from_body->name ne "Merton Council");
+    return $self->next::method($problem);
+}
 
 1;

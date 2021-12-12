@@ -158,6 +158,39 @@ subtest 'check /around?ajax defaults to open reports only' => sub {
 my @problems = FixMyStreet::DB->resultset('Problem')->search({}, { rows => 3, order_by => 'id' })->all;
 
 FixMyStreet::override_config {
+    ALLOWED_COBRANDS => [ 'oxfordshire', 'fixmystreet' ],
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+
+    my $problem1 = $problems[0];
+    $problem1->external_id("132987");
+    $problem1->set_extra_metadata(customer_reference => "ENQ12098123");
+    $problem1->whensent($problem1->confirmed);
+    $problem1->update;
+    my $problem2 = $problems[1];
+    $problem2->update({ external_id => "AlloyV2-687000682500b7000a1f3006", whensent => $problem2->confirmed });
+
+    # reports should display the same info on both cobrands
+    for my $host ( 'oxfordshire.fixmystreet.com', 'www.fixmystreet.com' ) {
+
+        subtest "$host handles external IDs/refs correctly" => sub {
+            ok $mech->host($host);
+
+            $mech->get_ok('/report/' . $problem1->id);
+            $mech->content_lacks($problem1->external_id, "WDM external ID not shown");
+            $mech->content_contains('Council ref:</strong> ENQ12098123', "WDM customer reference is shown");
+
+            $mech->get_ok('/report/' . $problem2->id);
+            $mech->content_lacks($problem2->external_id, "Alloy external ID not shown");
+            $mech->content_contains('Council ref:</strong> ' . $problem2->id, "FMS id is shown");
+        };
+    }
+
+    # Reset for the rest of the tests
+    ok $mech->host('oxfordshire.fixmystreet.com');
+};
+
+FixMyStreet::override_config {
     STAGING_FLAGS => { send_reports => 1, skip_checks => 1 },
     ALLOWED_COBRANDS => 'oxfordshire',
     MAPIT_URL => 'http://mapit.uk/',
@@ -203,7 +236,7 @@ FixMyStreet::override_config {
         $mech->get_ok('/report/' . $problem->id);
         $mech->content_contains('Investigation complete');
 
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
         $mech->email_count_is(1);
         my $email = $mech->get_email;
         my $body = $mech->get_text_body_from_email($email);
@@ -270,7 +303,7 @@ FixMyStreet::override_config {
             $p->set_extra_fields({ name => $test->{field}, value => $test->{value}});
             $p->update;
 
-            my $test_data = FixMyStreet::Script::Reports::send();
+            FixMyStreet::Script::Reports::send();
 
             $p->discard_changes;
             ok $p->whensent, 'Report marked as sent';
@@ -278,7 +311,7 @@ FixMyStreet::override_config {
             is $p->external_id, 248, 'Report has right external ID';
             unlike $p->detail, qr/$test->{text}:/, $test->{text} . ' not saved to report detail';
 
-            my $req = $test_data->{test_req_used};
+            my $req = Open311->test_req_used;
             my $c = CGI::Simple->new($req->content);
             like $c->param('description'), qr/$test->{text}: $test->{value}/, $test->{text} . ' included in body';
         };
@@ -306,16 +339,12 @@ FixMyStreet::override_config {
                 properties => { TYPE1_2_USRN => 13579 },
             } ];
         });
-        my $test_res = HTTP::Response->new();
-        $test_res->code(200);
-        $test_res->message('OK');
-        $test_res->content('<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>');
+        my $test_res = '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>';
 
         my $o = Open311->new(
             fixmystreet_body => $oxon,
-            test_mode => 1,
-            test_get_returns => { 'servicerequestupdates.xml' => $test_res },
         );
+        Open311->_inject_response('/servicerequestupdates.xml', $test_res);
 
         $o->post_service_request_update($comment);
         my $cgi = CGI::Simple->new($o->test_req_used->content);

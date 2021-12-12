@@ -96,14 +96,14 @@ FixMyStreet::override_config {
         $report->geocode($data);
         $report->update;
 
-        my $test_data = FixMyStreet::Script::Reports::send();
+        FixMyStreet::Script::Reports::send();
         $report->discard_changes;
         ok $report->whensent, 'Report marked as sent';
         is $report->send_method_used, 'Open311', 'Report sent via Open311';
         is $report->external_id, 248, 'Report has right external ID';
         is $report->detail, 'Test Test 1 for ' . $body->id . ' Detail', 'Report detail is unchanged';
 
-        my $req = $test_data->{test_req_used};
+        my $req = Open311->test_req_used;
         my $c = CGI::Simple->new($req->content);
         is $c->param('attribute[title]'), 'Test Test 1 for ' . $body->id, 'Request had correct title';
         my $expected_desc = 'Test Test 1 for ' . $body->id . " Detail\n\n(this report was made by <" . $staff_user->email . "> (" . $staff_user->name .") on behalf of the user)";
@@ -123,7 +123,7 @@ FixMyStreet::override_config {
     subtest 'testing reference numbers shown' => sub {
         $mech->get_ok('/report/' . $report->id);
         $mech->content_contains('Council ref:&nbsp;' . $report->id);
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
         like $mech->get_text_body_from_email, qr/reference number is @{[$report->id]}/;
     };
 

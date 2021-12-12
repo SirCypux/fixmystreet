@@ -19,10 +19,6 @@ use FixMyStreet::App::Model::PhotoSet;
 has jurisdiction => ( is => 'ro', isa => Str );;
 has api_key => ( is => 'ro', isa => Str );
 has endpoint => ( is => 'ro', isa => Str );
-has test_mode => ( is => 'ro', isa => Bool );
-has test_uri_used => ( is => 'rw', 'isa' => Str );
-has test_req_used => ( is => 'rw' );
-has test_get_returns => ( is => 'rw' );
 has endpoints => ( is => 'rw', default => sub { { services => 'services.xml', requests => 'requests.xml', service_request_updates => 'servicerequestupdates.xml', update => 'servicerequestupdates.xml' } } );
 has debug => ( is => 'ro', isa => Bool, default => 0 );
 has debug_details => ( is => 'rw', 'isa' => Str, default => '' );
@@ -106,7 +102,25 @@ sub send_service_request {
             if ( my $request_id = $obj->{request}->[0]->{service_request_id} ) {
                 return $request_id unless ref $request_id;
             } elsif ( my $token = $obj->{request}->[0]->{token} ) {
-                return $self->get_service_request_id_from_token( $token );
+
+                my $service_request_id;
+                my $polling_interval = FixMyStreet->config('O311_POLLING_INTERVAL') || 2;
+                my $polling_max_tries = FixMyStreet->config('O311_POLLING_MAX_TRIES') || 5;
+
+                for (1..$polling_max_tries) {
+                    sleep $polling_interval;
+                    $service_request_id = $self->get_service_request_id_from_token( $token );
+                    last if $service_request_id;
+                }
+                if ($service_request_id) {
+                    return $service_request_id;
+                } else {
+                    my $timeout_warning = "Timed out while trying to fetch service_request_id for token $token"
+                        . " and create remote case for FMS problem ID $problem->id.";
+                    $self->error($self->error . $timeout_warning);
+                    warn $timeout_warning unless FixMyStreet->test_mode;
+                    return 0;
+                }
             }
         }
 
@@ -489,7 +503,6 @@ sub _request {
     my $path = shift;
     my $params = shift || {};
     my $uploads = shift;
-
     my $uri = URI->new( $self->endpoint );
     $uri->path( $uri->path . $path );
 
@@ -545,21 +558,7 @@ sub _request {
     $debug_request .= $self->_params_to_string($params, $debug_request);
     $self->debug_details( $self->debug_details . $debug_request );
 
-    if ( $self->test_mode && $req->method eq 'GET') {
-        $self->success(1);
-        $self->test_uri_used( $uri->as_string );
-        return $self->test_get_returns->{ $path };
-    }
-
-    my $res = do {
-        if ( $self->test_mode ) {
-            $self->test_req_used( $req );
-            $self->test_get_returns->{ $path };
-        } else {
-            my $ua = LWP::UserAgent->new;
-            $ua->request( $req );
-        }
-    };
+    my $res = $self->_make_request($req);
 
     if ( $res->is_success ) {
         $self->success(1);
@@ -574,6 +573,13 @@ sub _request {
         ) );
         return;
     }
+}
+
+sub _make_request {
+    my ($self, $req) = @_;
+    my $ua = LWP::UserAgent->new;
+    my $res = $ua->request( $req );
+    return $res;
 }
 
 sub _get {

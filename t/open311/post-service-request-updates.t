@@ -22,11 +22,10 @@ my $bromley = $mech->create_body_ok(2482, 'Bromley', { %$params,
     can_be_devolved => 1 });
 my $oxon = $mech->create_body_ok(2237, 'Oxfordshire', { %$params, id => "5" . $bromley->id });
 my $bucks = $mech->create_body_ok(2217, 'Buckinghamshire', $params);
-my $lewisham = $mech->create_body_ok(2492, 'Lewisham', $params);
 
 subtest 'Check Open311 params' => sub {
   FixMyStreet::override_config {
-    ALLOWED_COBRANDS => ['fixmystreet', 'bromley', 'buckinghamshire', 'lewisham', 'oxfordshire'],
+    ALLOWED_COBRANDS => ['fixmystreet', 'bromley', 'buckinghamshire', 'oxfordshire'],
   }, sub {
     my $result = {
         endpoint => 'endpoint',
@@ -54,11 +53,6 @@ subtest 'Check Open311 params' => sub {
         mark_reopen => 1,
         fixmystreet_body => $bucks,
     }, 'Bucks params match';
-    %conf = $o->open311_params($lewisham);
-    is_deeply \%conf, {
-        %$result,
-        fixmystreet_body => $lewisham,
-    }, 'Lewisham params match';
   };
 };
 
@@ -84,11 +78,10 @@ my ($p1, $c1) = p_and_c($bromley, $other_user);
 my ($p2, $c2) = p_and_c($oxon);
 my ($p3, $c3a) = p_and_c($bucks);
 my $c3b = c($p3, $other_user);
-my ($p4, $c4) = p_and_c($lewisham);
 
 subtest 'Send comments' => sub {
   FixMyStreet::override_config {
-    ALLOWED_COBRANDS => ['fixmystreet', 'bromley', 'buckinghamshire', 'lewisham', 'oxfordshire'],
+    ALLOWED_COBRANDS => ['fixmystreet', 'bromley', 'buckinghamshire', 'oxfordshire'],
   }, sub {
     $o->send;
     $c3a->discard_changes;
@@ -109,15 +102,11 @@ subtest 'Check Bexley munging' => sub {
     my $bexley = $mech->create_body_ok(2494, 'Bexley', $params);
     $mech->create_contact_ok(body_id => $bexley->id, category => 'Other', email => "OTHER");
 
-    my $test_res = HTTP::Response->new();
-    $test_res->code(200);
-    $test_res->message('OK');
-    $test_res->content('<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>');
+    my $test_res = '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>';
     my $o = Open311->new(
         fixmystreet_body => $bexley,
-        test_mode => 1,
-        test_get_returns => { 'servicerequestupdates.xml' => $test_res },
     );
+    Open311->_inject_response('servicerequestupdates.xml', $test_res);
     my ($p5, $c5) = p_and_c($bexley);
     my $id = $o->post_service_request_update($c5);
     is $id, 248, 'correct update ID returned';
@@ -128,7 +117,7 @@ subtest 'Check Bexley munging' => sub {
 
 subtest 'Oxfordshire gets an ID' => sub {
   FixMyStreet::override_config {
-    ALLOWED_COBRANDS => ['fixmystreet', 'bromley', 'buckinghamshire', 'lewisham', 'oxfordshire'],
+    ALLOWED_COBRANDS => ['fixmystreet', 'bromley', 'buckinghamshire', 'oxfordshire'],
   }, sub {
     $p2->set_extra_metadata(customer_reference => 'ABC');
     $p2->update;
@@ -142,6 +131,7 @@ subtest 'Oxfordshire gets an ID' => sub {
 subtest 'Devolved contact' => sub {
     $mech->create_contact_ok(body_id => $bromley->id, category => 'Other', email => "OTHER", send_method => 'Open311', endpoint => '/devolved-endpoint/');
     $c1->update({ send_fail_count => 0 });
+    Open311->_inject_response('/devolved-endpoint/servicerequestupdates.xml', "", 500);
     $o->send;
     $c1->discard_changes;
     like $c1->send_fail_reason, qr/devolved-endpoint/, 'Failure message contains correct endpoint';

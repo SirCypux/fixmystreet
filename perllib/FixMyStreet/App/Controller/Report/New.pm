@@ -1128,7 +1128,7 @@ sub process_report : Private {
                 my $body = $c->model('DB::Body')->search({ name => $single_body_only })->first;
                 if ($body) {
                     # Drop the contacts down to those in this body
-                    # (potentially none for e.g. Highways England)
+                    # (potentially none for e.g. National Highways)
                     # so that set_report_extras doesn't error when
                     # there are 'missing' extra fields
                     @contacts = grep { $_->body->id == $body->id } @contacts;
@@ -1365,6 +1365,9 @@ sub tokenize_user : Private {
     };
     if (my $template = $c->stash->{override_confirmation_template}) {
         $c->stash->{token_data}->{template} = $template;
+    }
+    if (my $extra = $c->stash->{token_extra_data}) {
+        $c->stash->{token_data}->{extra} = $extra;
     }
     $c->forward('/auth/set_oauth_token_data', [ $c->stash->{token_data} ])
         if $c->get_param('oauth_need_email');
@@ -1769,9 +1772,10 @@ sub redirect_or_confirm_creation : Private {
         }
         # If the user has shortlist permission, and either we're not on a
         # council cobrand or the just-created problem is owned by the cobrand
-        # (so we'll stay on-cobrand), redirect to the problem.
+        # (so we'll stay on-cobrand), redirect to the problem (except WasteWorks).
         if ($c->user_exists && $c->user->has_body_permission_to('planned_reports') &&
-            (!$c->cobrand->is_council || $c->cobrand->owns_problem($report))) {
+            (!$c->cobrand->is_council || $c->cobrand->owns_problem($report)) &&
+            $report->cobrand_data ne 'waste') {
             $c->log->info($report->user->id . ' is an inspector - redirecting straight to report page for ' . $report->id);
             $c->res->redirect( $report->url );
         } else {

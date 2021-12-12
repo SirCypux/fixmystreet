@@ -179,7 +179,7 @@ for my $test (
         $problem->update;
         my $w3c = DateTime::Format::W3CDTF->new();
 
-        my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com', test_mode => 1 );
+        my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
         my $updates = Open311::GetUpdates->new(
             current_open311 => $o,
             current_body => $body,
@@ -727,6 +727,18 @@ subtest 'check reports from abuser not sent' => sub {
     is $problem->whensent, undef, 'reports from abuse user are not sent';
 
     ok $abuse->delete(), 'user removed from abuse table';
+};
+
+subtest 'check always using reply-to' => sub {
+    FixMyStreet::override_config {
+        COBRAND_FEATURES => { always_use_reply_to => { default => 1 } },
+    }, sub {
+        $problem->update({ state => 'confirmed' });
+        FixMyStreet::Script::Reports::send();
+        my $email = $mech->get_email;
+        is $email->header("Reply-To"), '"Test User" <system_user@example.net>';
+        like $email->header('From'), qr/"Test User" <fms-report-\d+-\w+\@example.org>/, 'from line looks correct';
+    };
 };
 
 subtest 'check response templates' => sub {

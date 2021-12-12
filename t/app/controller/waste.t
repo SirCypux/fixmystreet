@@ -15,6 +15,7 @@ my $mech = FixMyStreet::TestMech->new;
 
 my $body = $mech->create_body_ok(2482, 'Bromley Council');
 my $user = $mech->create_user_ok('test@example.net', name => 'Normal User');
+$user->update({ phone => "07123 456789" });
 my $nameless_user = $mech->create_user_ok('nameless@example.net', name => '');
 my $staff_user = $mech->create_user_ok('staff@example.org', from_body => $body, name => 'Staff User');
 $staff_user->user_body_permissions->create({ body => $body, permission_type => 'contribute_as_anonymous_user' });
@@ -144,9 +145,9 @@ FixMyStreet::override_config {
         $mech->submit_form_ok({ with_fields => { 'service-531' => 1 } });
         $mech->submit_form_ok({ with_fields => { name => "Test" } });
         $mech->content_contains('Please enter your full name');
-        $mech->content_contains('Please specify at least one of phone or email');
+        $mech->content_contains('Please provide email and/or phone');
         $mech->submit_form_ok({ with_fields => { name => "Test McTest", phone => '+441234567890' } });
-        $mech->content_contains('Please specify an email address');
+        $mech->content_contains('Please provide an email address');
         $mech->submit_form_ok({ with_fields => { name => "Test McTest", email => 'test@example.org' } });
         $mech->content_contains('Non-Recyclable Refuse');
         $mech->content_contains('Test McTest');
@@ -159,6 +160,19 @@ FixMyStreet::override_config {
         my $email = $mech->get_email;
         is $email->header('Subject'), 'Confirm your report on Bromley Recycling Services';
         my $link = $mech->get_link_from_email($email);
+
+        # Peterborough uses first page of process (not report category) to display
+        # correct confirmation message so test that it's been stored in token.
+        my ($token_id) = $link =~ m{/P/(\S+)};
+        my $token = FixMyStreet::DB->resultset('Token')->find(
+            {
+                token => $token_id,
+                scope => 'problem'
+            }
+        );
+        ok $token, 'Token found in database';
+        is $token->data->{extra}->{first_page}, "report", 'token stored first_page correctly';
+
         $mech->clear_emails_ok;
         $mech->get_ok($link);
         $mech->content_contains('Your missed collection has been reported');
@@ -171,6 +185,24 @@ FixMyStreet::override_config {
 
         is $user->alerts->count, 1;
         $mech->clear_emails_ok;
+    };
+    subtest 'About You form is pre-filled when logged in' => sub {
+        $mech->log_in_ok($user->email);
+        $mech->get_ok('/waste');
+        $mech->submit_form_ok({ with_fields => { postcode => 'BR1 1AA' } });
+        $mech->submit_form_ok({ with_fields => { address => '12345' } });
+        $mech->follow_link_ok({ text => 'Report a missed collection' });
+        $mech->submit_form_ok({ with_fields => { 'service-531' => 1 } });
+        $user->discard_changes;
+        $mech->content_contains($user->name);
+        $mech->content_contains($user->email);
+        $mech->content_contains($user->phone);
+        $mech->log_in_ok($staff_user->email);
+        $mech->get_ok('/waste/12345/report');
+        $mech->submit_form_ok({ with_fields => { 'service-531' => 1 } });
+        $mech->content_lacks($staff_user->name);
+        $mech->content_lacks($staff_user->email);
+        $mech->log_out_ok;
     };
     subtest 'Check report visibility' => sub {
         my $report = FixMyStreet::DB->resultset("Problem")->first;
@@ -303,9 +335,28 @@ FixMyStreet::override_config {
         is $report->detail, "Some notes\n\n2 Example Street, Bromley, BR1 1AA";
         is $report->user->email, $user->email;
         is $report->get_extra_metadata('contributed_by'), $staff_user->id;
-        is $report->get_extra_field_value('Source'), 9, 'Correct source'
+        is $report->get_extra_field_value('Source'), 9, 'Correct source';
     };
-
+    subtest "General enquiry, staff doesn't change name" => sub {
+        my $original_name = $staff_user->name;
+        $mech->log_in_ok($staff_user->email);
+        $mech->get_ok('/waste/12345/enquiry?category=General+enquiry&service_id=537');
+        $mech->submit_form_ok({ with_fields => { extra_Notes => 'Some notes' } });
+        $mech->submit_form_ok({ with_fields => { name => "Test McTest", email => $staff_user->email } });
+        $mech->content_contains('Some notes');
+        $mech->content_contains('Test McTest');
+        $mech->content_contains($staff_user->email);
+        $mech->submit_form_ok({ with_fields => { process => 'summary' } });
+        $mech->content_contains('Your enquiry has been submitted');
+        my $report = FixMyStreet::DB->resultset("Problem")->search(undef, { order_by => { -desc => 'id' } })->first;
+        is $report->get_extra_field_value('Notes'), 'Some notes';
+        is $report->detail, "Some notes\n\n2 Example Street, Bromley, BR1 1AA";
+        is $report->user->email, $staff_user->email;
+        is $report->name, "Test McTest";
+        is $report->get_extra_field_value('Source'), 9, 'Correct source';
+        $staff_user->discard_changes;
+        is $staff_user->name, $original_name, 'Staff user name stayed the same';
+    };
     subtest 'Ignores expired services' => sub {
         my $echo = Test::MockModule->new('Integrations::Echo');
         $echo->mock('GetServiceUnitsForObject', sub {
@@ -794,7 +845,37 @@ FixMyStreet::override_config {
         set_fixed_time('2021-05-05T17:00:00Z');
         $mech->get_ok('/waste/12345');
         $mech->content_contains('Subscribe to Green Garden Waste', 'Subscribe link present if expired');
+
+        # Just the 537 paper service (which has report + request),
+        # to test whether garden waste sub still shown
         my $echo = Test::MockModule->new('Integrations::Echo');
+        $echo->mock('GetServiceUnitsForObject', sub {
+            return [ {
+                Id => 1002,
+                ServiceId => 537,
+                ServiceName => 'Paper recycling collection',
+                ServiceTasks => { ServiceTask => {
+                    Id => 402,
+                    ServiceTaskSchedules => { ServiceTaskSchedule => {
+                        ScheduleDescription => 'every other Wednesday',
+                        StartDate => { DateTime => '2020-01-01T00:00:00Z' },
+                        EndDate => { DateTime => '2050-01-01T00:00:00Z' },
+                        NextInstance => {
+                            CurrentScheduledDate => { DateTime => '2020-06-10T00:00:00Z' },
+                            OriginalScheduledDate => { DateTime => '2020-06-10T00:00:00Z' },
+                        },
+                        LastInstance => {
+                            OriginalScheduledDate => { DateTime => '2020-05-27T00:00:00Z' },
+                            CurrentScheduledDate => { DateTime => '2020-05-27T00:00:00Z' },
+                            Ref => { Value => { anyType => [ 234, 567 ] } },
+                        },
+                    } },
+                } },
+            } ];
+        } );
+        $mech->get_ok('/waste/12345');
+        $mech->content_contains('Subscribe to Green Garden Waste', 'Subscribe link present even if all requested');
+
         set_fixed_time('2021-03-09T17:00:00Z');
         $echo->mock('GetServiceUnitsForObject', sub {
             return [ {
@@ -925,6 +1006,16 @@ FixMyStreet::override_config {
         $mech->content_contains('Test McTest');
         $mech->content_contains('£20.00');
         $mech->content_contains('1 bin');
+        $mech->submit_form_ok({ with_fields => { goto => 'details' } });
+        $mech->content_contains('<span id="cost_pa">20.00');
+        $mech->content_contains('<span id="cost_now">20.00');
+        $mech->submit_form_ok({ with_fields => {
+                current_bins => 0,
+                bins_wanted => 1,
+                payment_method => 'credit_card',
+                name => 'Test McTest',
+                email => 'test@example.net'
+        } });
         # external redirects make Test::WWW::Mechanize unhappy so clone
         # the mech for the redirect
         my $mech2 = $mech->clone;
@@ -1117,7 +1208,7 @@ FixMyStreet::override_config {
 
     $echo->mock('GetServiceUnitsForObject', \&garden_waste_one_bin);
 
-    subtest 'check modify sub credit card payment' => sub {
+    subtest 'check modify sub with bad details' => sub {
         set_fixed_time('2021-01-09T17:00:00Z'); # After sample data collection
         $mech->log_out_ok();
         $mech->get_ok('/waste/12345/garden_modify');
@@ -1125,9 +1216,22 @@ FixMyStreet::override_config {
         $mech->log_in_ok($user->email);
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
-        $mech->submit_form_ok({ with_fields => { bin_number => 2 } });
+        $mech->submit_form_ok({ with_fields => { current_bins => 2, bins_wanted => 2 } });
+        $mech->content_contains('2 bins');
         $mech->content_contains('40.00');
         $mech->content_contains('7.50');
+    };
+    subtest 'check modify sub credit card payment' => sub {
+        $mech->get_ok('/waste/12345/garden_modify');
+        $mech->submit_form_ok({ with_fields => { task => 'modify' } });
+        $mech->submit_form_ok({ with_fields => { current_bins => 1, bins_wanted => 2 } });
+        $mech->content_contains('2 bins');
+        $mech->content_contains('40.00');
+        $mech->content_contains('7.50');
+        $mech->submit_form_ok({ with_fields => { goto => 'alter' } });
+        $mech->content_contains('<span id="cost_per_year">40.00');
+        $mech->content_contains('<span id="pro_rata_cost">7.50');
+        $mech->submit_form_ok({ with_fields => { current_bins => 1, bins_wanted => 2 } });
         $mech->submit_form_ok({ with_fields => { tandc => 1 } });
         is $sent_params->{amount}, 750, 'correct amount used';
 
@@ -1164,7 +1268,7 @@ FixMyStreet::override_config {
         $mech->log_in_ok($user->email);
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
-        $mech->submit_form_ok({ with_fields => { bin_number => 1 } });
+        $mech->submit_form_ok({ with_fields => { current_bins => 2, bins_wanted => 1 } });
         $mech->content_contains('20.00');
         $mech->content_lacks('Continue to payment');
         $mech->content_contains('Confirm changes');
@@ -1202,9 +1306,9 @@ FixMyStreet::override_config {
         $mech->log_in_ok($user->email);
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
-        $mech->submit_form_ok({ with_fields => { bin_number => 7 } });
+        $mech->submit_form_ok({ with_fields => { current_bins => 1, bins_wanted => 7 } });
         $mech->content_contains('Value must be between 1 and 6');
-        $mech->submit_form_ok({ with_fields => { bin_number => 2 } });
+        $mech->submit_form_ok({ with_fields => { current_bins => 1, bins_wanted => 2 } });
         $mech->content_contains('40.00');
         $mech->content_contains('7.50');
         $mech->content_contains('Amend Direct Debit');
@@ -1238,7 +1342,7 @@ FixMyStreet::override_config {
         $mech->log_in_ok($user->email);
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
-        $mech->submit_form_ok({ with_fields => { bin_number => 1 } });
+        $mech->submit_form_ok({ with_fields => { current_bins=> 2, bins_wanted => 1 } });
         $mech->content_like(qr#Total to pay today</dt>\s*<dd[^>]*>£0.00#);
         $mech->content_like(qr#Total</dt>\s*<dd[^>]*>£20.00#);
         $mech->content_contains('Amend Direct Debit');
@@ -1328,7 +1432,16 @@ FixMyStreet::override_config {
             bins_wanted => 1,
             payment_method => 'credit_card',
         } });
+        $mech->content_contains('1 bin');
         $mech->content_contains('20.00');
+        $mech->submit_form_ok({ with_fields => { goto => 'intro' } });
+        $mech->content_contains('<span id="cost_pa">20.00');
+        $mech->content_contains('<span id="cost_now">20.00');
+        $mech->submit_form_ok({ with_fields => {
+            current_bins => 1,
+            bins_wanted => 1,
+            payment_method => 'credit_card',
+        } });
         $mech->submit_form_ok({ with_fields => { tandc => 1 } });
         is $sent_params->{amount}, 2000, 'correct amount used';
 
@@ -1406,6 +1519,9 @@ FixMyStreet::override_config {
 
         $new_report->discard_changes;
         is $new_report->state, 'unconfirmed', 'report still not confirmed';
+
+        # Delete report otherwise next test thinks we have a DD subscription (which we do now)
+        $new_report->delete;
     };
 
     subtest 'renew credit card sub with an extra bin' => sub {
@@ -1800,6 +1916,7 @@ FixMyStreet::override_config {
         is $report->get_extra_field_value('Container_Instruction_Action'), '', 'no container request action';
         is $report->get_extra_field_value('Container_Instruction_Quantity'), '', 'no container request count';
         is $report->state, 'confirmed', 'report confirmed';
+        $report->delete; # Otherwise next test sees this as latest
     };
 
     subtest 'check staff renewal - no email' => sub {
@@ -1835,6 +1952,7 @@ FixMyStreet::override_config {
         is $report->state, 'confirmed', 'report confirmed';
         is $report->get_extra_metadata('contributed_by'), $staff_user->id;
         is $report->get_extra_metadata('contributed_as'), 'anonymous_user';
+        $report->delete; # Otherwise next test sees this as latest
     };
 
     subtest 'check modify sub staff' => sub {
@@ -1842,7 +1960,8 @@ FixMyStreet::override_config {
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
         $mech->submit_form_ok({ with_fields => {
-            bin_number => 2,
+            current_bins => 1,
+            bins_wanted => 2,
             name => 'Test McTest',
             email => 'test@example.net'
         } });
@@ -1870,6 +1989,7 @@ FixMyStreet::override_config {
         is $report->user->email, 'test@example.net', 'non staff email';
 
         $mech->content_like(qr#/waste/12345">Show upcoming#, "contains link to bin page");
+        $report->delete; # Otherwise next test sees this as latest
     };
 
     subtest 'check modify sub staff reducing bin count' => sub {
@@ -1880,7 +2000,8 @@ FixMyStreet::override_config {
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
         $mech->submit_form_ok({ with_fields => {
-            bin_number => 1,
+            current_bins => 2,
+            bins_wanted => 1,
             name => 'A user',
             email => '',
         } });
@@ -2240,7 +2361,6 @@ FixMyStreet::override_config {
         is $new_report->get_extra_metadata('scpReference'), '12345', 'correct scp reference on report';
 
         $mech->get_ok("/waste/pay_complete/$report_id/$token");
-        #warn $mech->content;
         is $sent_params->{scpReference}, 12345, 'correct scpReference sent';
 
         $new_report->discard_changes;
@@ -2322,7 +2442,6 @@ FixMyStreet::override_config {
         is $new_report->get_extra_metadata('scpReference'), '12345', 'correct scp reference on report';
 
         $mech->get_ok("/waste/pay_complete/$report_id/$token");
-        #warn $mech->content;
         is $sent_params->{scpReference}, 12345, 'correct scpReference sent';
 
         $new_report->discard_changes;
@@ -2349,7 +2468,7 @@ FixMyStreet::override_config {
         $mech->log_in_ok($user->email);
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
-        $mech->submit_form_ok({ with_fields => { bin_number => 2 } });
+        $mech->submit_form_ok({ with_fields => { current_bins => 1, bins_wanted => 2 } });
         $mech->content_contains('40.00');
         $mech->content_contains('7.50');
         $mech->submit_form_ok({ with_fields => { tandc => 1 } });
@@ -2387,10 +2506,11 @@ FixMyStreet::override_config {
         $mech->log_in_ok($nameless_user->email);
         $mech->get_ok('/waste/12345/garden_modify');
         $mech->submit_form_ok({ with_fields => { task => 'modify' } });
-        $mech->submit_form_ok({ with_fields => { bin_number => 2 } });
-        $mech->content_contains('Your name field is required');
+        $mech->submit_form_ok({ with_fields => { current_bins => 1, bins_wanted => 2 } });
+        $mech->content_contains('Your name is required');
         $mech->submit_form_ok({ with_fields => {
-            bin_number => 2,
+            current_bins => 1,
+            bins_wanted => 2,
             name => 'A Name',
         } });
         $mech->content_contains('A Name');

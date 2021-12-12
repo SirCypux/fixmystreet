@@ -453,7 +453,7 @@ subtest "Test normal alert signups and that alerts are sent" => sub {
 
     my $dt = DateTime->now()->add(days => 2);
 
-    my ($report) = $mech->create_problems_for_body(1, 1, 'Testing', {
+    my ($report) = $mech->create_problems_for_body(1, $body->id, 'Testing', {
         dt => $dt,
         user => $user1,
         postcode           => 'EH1 1BB',
@@ -480,7 +480,9 @@ subtest "Test normal alert signups and that alerts are sent" => sub {
     FixMyStreet::override_config {
         MAPIT_URL => 'http://mapit.uk/',
     }, sub {
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
+        FixMyStreet::Script::Alerts::send_other();
+        FixMyStreet::Script::Alerts::send_local();
     };
     # TODO Note the below will fail if the db has an existing alert that matches
     $mech->email_count_is(3);
@@ -529,7 +531,7 @@ subtest "Test alerts are not sent for no-text updates" => sub {
     my $user3 = $mech->create_user_ok('staff@example.com', name => 'Staff User', from_body => $gloucester );
     my $dt = DateTime->now()->add(days => 2);
 
-    my ($report, $report2) = $mech->create_problems_for_body(2, 1, 'Testing', {
+    my ($report, $report2) = $mech->create_problems_for_body(2, $body->id, 'Testing', {
         user => $user1,
     });
     my $report_id = $report->id;
@@ -559,7 +561,7 @@ subtest "Test alerts are not sent for no-text updates" => sub {
     FixMyStreet::override_config {
         MAPIT_URL => 'http://mapit.uk/',
     }, sub {
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
     };
 
     $mech->email_count_is(1);
@@ -577,39 +579,48 @@ subtest "Test no marked as confirmed added to alerts" => sub {
     my $user3 = $mech->create_user_ok('staff@example.com', name => 'Staff User', from_body => $gloucester );
     my $dt = DateTime->now()->add(days => 2);
 
-    my ($report) = $mech->create_problems_for_body(1, 1, 'Testing', {
+    my ($report1, $report2) = $mech->create_problems_for_body(2, $body->id, 'Testing', {
         user => $user1,
         state => 'investigating',
     });
-    my $report_id = $report->id;
-    ok $report, "created test report - $report_id";
+    my $report_id = $report1->id;
+    ok $report1, "created test reports - $report_id";
 
-    my $alert = FixMyStreet::DB->resultset('Alert')->create( {
+    my $alert1 = FixMyStreet::DB->resultset('Alert')->create( {
         parameter  => $report_id,
         alert_type => 'new_updates',
         user       => $user2,
     } )->confirm;
-    ok $alert, 'created alert for other user';
+    my $alert2 = FixMyStreet::DB->resultset('Alert')->create( {
+        parameter  => $report2->id,
+        alert_type => 'new_updates',
+        user       => $user2,
+    } )->confirm;
 
-    $mech->create_comment_for_problem($report, $user3, 'Staff User', 'this is update', 'f', 'confirmed', 'confirmed', { confirmed  => $dt->clone->add( hours => 9 ) });
-    $mech->create_comment_for_problem($report, $user3, 'Staff User', 'this is another update', 'f', 'confirmed', 'investigating', { confirmed  => $dt->clone->add( hours => 10 ) });
-    $mech->create_comment_for_problem($report, $user3, 'Staff User', 'this is a third update, same state', 'f', 'confirmed', 'investigating', { confirmed  => $dt->clone->add( hours => 11 ) });
+    $mech->create_comment_for_problem($report1, $user3, 'Staff User', 'this is update', 'f', 'confirmed', 'confirmed', { confirmed  => $dt->clone->add( hours => 9 ) });
+    $mech->create_comment_for_problem($report1, $user3, 'Staff User', 'this is another update', 'f', 'confirmed', 'investigating', { confirmed  => $dt->clone->add( hours => 10 ) });
+    $mech->create_comment_for_problem($report1, $user3, 'Staff User', 'this is a third update, same state', 'f', 'confirmed', 'investigating', { confirmed  => $dt->clone->add( hours => 11 ) });
+    $mech->create_comment_for_problem($report2, $user3, 'Staff User', 'this is update', 'f', 'confirmed', 'confirmed', { confirmed  => $dt->clone->add( hours => 9 ) });
 
     $mech->clear_emails_ok;
     FixMyStreet::override_config {
         MAPIT_URL => 'http://mapit.uk/',
     }, sub {
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
     };
 
-    $mech->email_count_is(1);
-    my $email = $mech->get_email;
-    my $body = $mech->get_text_body_from_email($email);
+    $mech->email_count_is(2);
+    my @email = $mech->get_email;
+    my $body = $mech->get_text_body_from_email($email[0]);
     like $body, qr/The following updates have been left on this report:/, 'email is about updates to existing report';
     like $body, qr/Staff User/, 'Update comes from correct user';
     unlike $body, qr/State changed to: Open/s, 'no marked as confirmed text';
     like $body, qr/State changed to: Investigating/, 'mention of state change';
     unlike $body, qr/State changed to: Investigating.*State changed to: Investigating/s, 'only one mention of state change';
+    $body = $mech->get_text_body_from_email($email[1]);
+    like $body, qr/The following updates have been left on this report:/, 'email is about updates to existing report';
+    like $body, qr/Staff User/, 'Update comes from correct user';
+    unlike $body, qr/State changed to: Open/s, 'no marked as confirmed text';
 
     $mech->delete_user($user1);
     $mech->delete_user($user2);
@@ -642,7 +653,7 @@ for my $test (
         my $user3 = $mech->create_user_ok('staff@example.com', name => 'Staff User', from_body => $gloucester );
         my $dt = DateTime->now()->add(days => 2);
 
-        my ($report) = $mech->create_problems_for_body(1, 1, 'Testing', {
+        my ($report) = $mech->create_problems_for_body(1, $body->id, 'Testing', {
             user => $user1,
         });
         my $report_id = $report->id;
@@ -661,7 +672,7 @@ for my $test (
         FixMyStreet::override_config {
             MAPIT_URL => 'http://mapit.uk/',
         }, sub {
-            FixMyStreet::Script::Alerts::send();
+            FixMyStreet::Script::Alerts::send_updates();
         };
 
         $mech->email_count_is(1);
@@ -709,7 +720,7 @@ subtest "Test signature template is used from cobrand" => sub {
         MAPIT_URL => 'http://mapit.uk/',
         ALLOWED_COBRANDS => 'fixmystreet',
     }, sub {
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
     };
 
     my $email = $mech->get_text_body_from_email;
@@ -726,7 +737,7 @@ subtest "Test signature template is used from cobrand" => sub {
         MAPIT_URL => 'http://mapit.uk/',
         ALLOWED_COBRANDS => 'fixmystreet',
     }, sub {
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
     };
 
     $email = $mech->get_text_body_from_email;
@@ -799,7 +810,8 @@ for my $test (
         FixMyStreet::override_config {
             MAPIT_URL => 'http://mapit.uk/',
         }, sub {
-            FixMyStreet::Script::Alerts::send();
+            FixMyStreet::Script::Alerts::send_other();
+            FixMyStreet::Script::Alerts::send_local();
         };
         $mech->email_count_is(0);
 
@@ -807,7 +819,8 @@ for my $test (
         FixMyStreet::override_config {
             MAPIT_URL => 'http://mapit.uk/',
         }, sub {
-            FixMyStreet::Script::Alerts::send();
+            FixMyStreet::Script::Alerts::send_other();
+            FixMyStreet::Script::Alerts::send_local();
         };
         my $email = $mech->get_text_body_from_email;
         like $email, qr/Alert\s+test\s+for\s+non\s+public\s+reports/, 'alert contains public report';
@@ -842,7 +855,7 @@ subtest 'check new updates alerts for non public reports only go to report owner
     ok $alert_user1, "alert created";
 
     $mech->clear_emails_ok;
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
     $mech->email_count_is(0);
 
     my $alert_user2 = FixMyStreet::DB->resultset('Alert')->create( {
@@ -854,13 +867,13 @@ subtest 'check new updates alerts for non public reports only go to report owner
     } );
     ok $alert_user2, "alert created";
 
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
     my $email = $mech->get_text_body_from_email;
     like $email, qr/This is some more update text/, 'alert contains update text';
 
     $mech->clear_emails_ok;
     $report->update( { non_public => 0 } );
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
     $email = $mech->get_text_body_from_email;
     like $email, qr/This is some more update text/, 'alert contains update text';
 
@@ -899,7 +912,7 @@ subtest 'check setting include dates in new updates cobrand option' => sub {
 
 
     $mech->clear_emails_ok;
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
 
     my $date_in_alert = Utils::prettify_dt( $update->confirmed );
     my $email = $mech->get_text_body_from_email;
@@ -939,7 +952,7 @@ subtest 'check staff updates can include sanitized HTML' => sub {
     } );
     ok $alert_user1, "alert created";
 
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
     my $email = $mech->get_email;
     $mech->clear_emails_ok;
     my $plain = $mech->get_text_body_from_email($email);
@@ -997,7 +1010,7 @@ FixMyStreet::override_config {
     ok $alert_user1, "alert created";
 
     # Check they get a normal email alert by default
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
     $mech->email_count_is(1);
     is @{$twilio->texts}, 0;
     $mech->clear_emails_ok;
@@ -1005,7 +1018,7 @@ FixMyStreet::override_config {
     # Check they don't get any update when set to none
     FixMyStreet::DB->resultset('AlertSent')->delete;
     $user1->update({ extra => { update_notify => 'none' } });
-    FixMyStreet::Script::Alerts::send();
+    FixMyStreet::Script::Alerts::send_updates();
     $mech->email_count_is(0);
     is @{$twilio->texts}, 0;
 
@@ -1016,7 +1029,7 @@ FixMyStreet::override_config {
     ) {
         FixMyStreet::DB->resultset('AlertSent')->delete;
         $user1->update($_);
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
         $mech->email_count_is(0);
         is @{$twilio->texts}, 1, 'got a text';
         my $text = $twilio->texts->[0]->{Body};

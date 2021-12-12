@@ -485,6 +485,103 @@ subtest 'check existing non_public category does not get marked public' => sub {
     is $contact->non_public, 1, 'contact remains non_public';
 };
 
+subtest 'check new category marked waste_only' => sub {
+    FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->delete();
+
+    my $services_xml = '<?xml version="1.0" encoding="utf-8"?>
+    <services>
+      <service>
+        <service_code>404</service_code>
+        <service_name>Food bin missing</service_name>
+        <description></description>
+        <metadata>false</metadata>
+        <type>realtime</type>
+        <keywords>waste_only</keywords>
+        <group>Missing bin</group>
+      </service>
+    </services>
+        ';
+
+    my $service_list = get_xml_simple_object( $services_xml );
+
+    my $processor = Open311::PopulateServiceList->new();
+    $processor->_current_body( $body );
+    $processor->process_services( $service_list );
+
+    my $contact_count = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->count();
+    is $contact_count, 1, 'correct number of contacts';
+
+    my $contact = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->first;
+    is $contact->email, '404', 'email correct';
+    is $contact->category, 'Food bin missing', 'category correct';
+    is $contact->get_extra_metadata('waste_only'), 1, 'contact marked as waste_only in extra';
+};
+
+subtest 'check new category not marked waste_only' => sub {
+    FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->delete();
+
+    my $services_xml = '<?xml version="1.0" encoding="utf-8"?>
+    <services>
+      <service>
+        <service_code>404</service_code>
+        <service_name>Food bin missing</service_name>
+        <description></description>
+        <metadata>false</metadata>
+        <type>realtime</type>
+        <keywords></keywords>
+        <group>Missing bin</group>
+      </service>
+    </services>
+        ';
+
+    my $service_list = get_xml_simple_object( $services_xml );
+
+    my $processor = Open311::PopulateServiceList->new();
+    $processor->_current_body( $body );
+    $processor->process_services( $service_list );
+
+    my $contact_count = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->count();
+    is $contact_count, 1, 'correct number of contacts';
+
+    my $contact = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->first;
+    is $contact->email, '404', 'email correct';
+    is $contact->category, 'Food bin missing', 'category correct';
+    is $contact->get_extra_metadata('waste_only'), undef, 'contact not marked as waste_only in extra';
+};
+
+subtest 'check existing category marked waste_only' => sub {
+    my $contact = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->first;
+    is $contact->get_extra_metadata('waste_only'), undef, 'contact not marked as waste_only in extra';
+
+    my $services_xml = '<?xml version="1.0" encoding="utf-8"?>
+    <services>
+      <service>
+        <service_code>404</service_code>
+        <service_name>Food bin missing</service_name>
+        <description></description>
+        <metadata>false</metadata>
+        <type>realtime</type>
+        <keywords>waste_only</keywords>
+        <group>Missing bin</group>
+      </service>
+    </services>
+        ';
+
+    my $service_list = get_xml_simple_object( $services_xml );
+
+    my $processor = Open311::PopulateServiceList->new();
+    $processor->_current_body( $body );
+    $processor->process_services( $service_list );
+
+    my $contact_count = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->count();
+    is $contact_count, 1, 'correct number of contacts';
+
+    $contact = FixMyStreet::DB->resultset('Contact')->search( { body_id => $body->id } )->first;
+    is $contact->email, '404', 'email correct';
+    is $contact->category, 'Food bin missing', 'category correct';
+    is $contact->get_extra_metadata('waste_only'), 1, 'contact marked as waste_only in extra';
+};
+
 for my $test (
     {
         desc => 'check meta data added to existing contact',
@@ -810,9 +907,9 @@ for my $test (
         my $o = Open311->new(
             jurisdiction => 'mysociety',
             endpoint => 'http://example.com',
-            test_mode => 1,
-            test_get_returns => { 'services.xml' => $services_xml, 'services/100.xml' => $test->{meta_xml} }
         );
+        Open311->_inject_response('/services.xml', $services_xml);
+        Open311->_inject_response('/services/100.xml', $test->{meta_xml});
 
         my $service_list = get_xml_simple_object( $services_xml );
 
@@ -890,9 +987,8 @@ subtest 'check attribute ordering' => sub {
     my $o = Open311->new(
         jurisdiction => 'mysociety',
         endpoint => 'http://example.com',
-        test_mode => 1,
-        test_get_returns => { 'services/100.xml' => $meta_xml }
     );
+    Open311->_inject_response('/services/100.xml', $meta_xml);
 
     $processor->_current_open311( $o );
     $processor->_current_body( $body );
@@ -1000,8 +1096,6 @@ subtest 'check Bromley skip code' => sub {
     my $o = Open311->new(
         jurisdiction => 'mysociety',
         endpoint => 'http://example.com',
-        test_mode => 1,
-        test_get_returns => { 'services/100.xml' => $meta_xml }
     );
 
     $processor->_current_open311( $o );
@@ -1012,6 +1106,7 @@ subtest 'check Bromley skip code' => sub {
     };
     $processor->_current_service( { service_code => 100 } );
 
+    Open311->_inject_response('/services/100.xml', $meta_xml);
     $processor->_add_meta_to_contact( $contact );
 
     my $extra = [ {
@@ -1046,6 +1141,7 @@ subtest 'check Bromley skip code' => sub {
     is_deeply $contact->get_extra_fields, $extra, 'only non std bromley meta data saved';
 
     $processor->_current_body( $body );
+    Open311->_inject_response('/services/100.xml', $meta_xml);
     $processor->_add_meta_to_contact( $contact );
 
     $extra = [
@@ -1126,8 +1222,6 @@ subtest 'check Buckinghamshire extra code' => sub {
     my $o = Open311->new(
         jurisdiction => 'mysociety',
         endpoint => 'http://example.com',
-        test_mode => 1,
-        test_get_returns => { 'services/100.xml' => $meta_xml }
     );
 
     $processor->_current_open311( $o );
@@ -1137,6 +1231,7 @@ subtest 'check Buckinghamshire extra code' => sub {
         $processor->_current_body( $bucks );
     };
     $processor->_current_service( { service_code => 100, service_name => 'Flytipping' } );
+    Open311->_inject_response('/services/100.xml', $meta_xml);
     $processor->_add_meta_to_contact( $contact );
 
     my $extra = [ {
@@ -1164,6 +1259,7 @@ subtest 'check Buckinghamshire extra code' => sub {
     is_deeply $contact->get_extra_fields, $extra, 'extra Bucks field returned for flytipping';
 
     $processor->_current_service( { service_code => 100, service_name => 'Street lights' } );
+    Open311->_inject_response('/services/100.xml', $meta_xml);
     $processor->_add_meta_to_contact( $contact );
 
     $extra = [ {

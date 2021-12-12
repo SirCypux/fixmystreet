@@ -434,7 +434,7 @@ function asset_selected(e) {
 }
 
 function asset_unselected(e) {
-    if (selected_feature.layer !== this) {
+    if (selected_feature && selected_feature.layer !== this) {
         // The selected feature has already changed to something in a different
         // layer, so we don't want to mess that up by clearing it
         return;
@@ -511,9 +511,9 @@ function _update_message(message, c) {
         id = "category_meta_message_" + prefix,
         $p = $('#' + id);
     if (message) {
-        $p.html(message);
+        $p.html(message).show();
     } else {
-        $p.remove();
+        $p.hide();
     }
 }
 
@@ -1168,7 +1168,7 @@ $(fixmystreet).on('body_overrides:change', function() {
 /*
 Handling of the form-top messaging: This handles categories that hide the form
 and show a message, and categories where assets must be selected or the pin
-must be on a road, taking into account Highways England roads.
+must be on a road, taking into account National Highways roads.
 */
 
 fixmystreet.message_controller = (function() {
@@ -1299,8 +1299,8 @@ fixmystreet.message_controller = (function() {
 
     function check_for_stopper() {
         var only_send = fixmystreet.body_overrides.get_only_send();
-        if (only_send == 'Highways England') {
-            // If we're sending to Highways England, this message doesn't matter
+        if (only_send == 'National Highways') {
+            // If we're sending to National Highways, this message doesn't matter
             return;
         }
 
@@ -1368,8 +1368,8 @@ fixmystreet.message_controller = (function() {
         // probably a field or something. Show an error to that effect,
         // unless an asset is selected.
         road_not_found: function(layer) {
-            // don't show the message if clicking on a highways england road
-            if (fixmystreet.body_overrides.get_only_send() == 'Highways England' || !layer.visibility) {
+            // don't show the message if clicking on a National Highways road
+            if (fixmystreet.body_overrides.get_only_send() == 'National Highways' || !layer.visibility) {
                 responsibility_off(layer, 'road');
             } else if (fixmystreet.assets.selectedFeature()) {
                 fixmystreet.body_overrides.allow_send(layer.fixmystreet.body);

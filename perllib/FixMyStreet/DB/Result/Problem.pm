@@ -800,14 +800,14 @@ sub defect_types {
 }
 
 # returns true if the external id is the council's ref, i.e., useful to publish it
-# (by way of an example, the Oxfordshire send method returns a useful reference when
+# (by way of an example, the Open311 send method returns a useful reference when
 # it succeeds, so that is the ref we should show on the problem report page).
 #     Future: this is installation-dependent so maybe should be using the contact
 #             data to determine if the external id is public on a council-by-council basis.
 #     Note:   this only makes sense when called on a problem that has been sent!
 sub can_display_external_id {
     my $self = shift;
-    if ($self->external_id && $self->to_body_named('Oxfordshire|Lincolnshire|Isle of Wight|East Sussex|Central Bedfordshire')) {
+    if ( $self->external_id && $self->to_body_named('Lincolnshire|Isle of Wight|East Sussex|Central Bedfordshire|Shropshire|Merton') ) {
         return 1;
     }
     return 0;
@@ -871,7 +871,8 @@ sub updates_sent_to_body {
     # Some bodies only send updates *to* FMS, they don't receive updates.
     my $cobrand = $self->get_cobrand_logged;
     my $handler = $cobrand->call_hook(get_body_handler_for_problem => $self);
-    return 0 if $handler && $handler->call_hook('open311_post_update_skip');
+    my $ret = $handler && $handler->call_hook(updates_sent_to_body => $self);
+    return $ret if defined $ret;
 
     my @bodies = values %{ $self->bodies };
     my @updates_sent = grep {

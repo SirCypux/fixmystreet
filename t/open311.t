@@ -42,6 +42,7 @@ for my $sfc (0..2) {
     } );
     my $expected_error = qr{Failed to submit problem 1 over Open311}ism;
 
+    Open311->_inject_response('/open311/requests.xml', 'Failure', 400);
     if ($sfc == 1) {
         warning_like {$o2->send_service_request( $p, { url => 'http://example.com/' }, 1 )} $expected_error, 'warning generated on failed call';
     } else {
@@ -123,6 +124,60 @@ subtest 'posting service request with basic_description' => sub {
     my $c = CGI::Simple->new( $results->{ req }->content );
 
     is $c->param('description'), $problem->detail, 'description correct';
+};
+
+subtest 'post service request that responds with a token, then fetch SR id using token' => sub {
+    my $extra = {
+        url => 'http://example.com/report/1',
+    };
+
+    my $token = '369FBB0C-4755-11EC-96C0-F6CCC296753D';
+
+    # inject 'tokens/$token.xml' path to mock `GET svc_req_id from token`
+    Open311->_inject_response("tokens/$token.xml",'<?xml version="1.0" encoding="utf-8"?><service_requests><request><service_request_id>SRQ-0123-4567</service_request_id><token>' . $token . '</token></request></service_requests>', 200);
+
+    FixMyStreet::override_config {
+        O311_POLLING_INTERVAL => 0,
+        O311_POLLING_MAX_TRIES => 1,
+    }, sub {
+        # mock POST Service Request that returns a (GUID) token
+        my $results = make_service_req(
+            $problem,
+            $extra,
+            $problem->category,
+            '<?xml version="1.0" encoding="utf-8"?><service_requests><request><token>' . $token . '</token></request></service_requests>',
+            { extended_description => 0 },
+        );
+
+        is $results->{ res }, 'SRQ-0123-4567', 'got request id';
+    };
+};
+
+subtest 'post service request that responds with a token and errors' => sub {
+    my $extra = {
+        url => 'http://example.com/report/1',
+    };
+
+    my $token = '369FBB0C-4755-11EC-96C0-F6CCC296753D';
+
+    # inject 'tokens/$token.xml' path to mock `GET svc_req_id from token`
+    Open311->_inject_response("tokens/$token.xml",'<?xml version="1.0" encoding="utf-8"?><service_requests><request><service_request_id></service_request_id><token>' . $token . '</token></request></service_requests>', 400);
+
+    FixMyStreet::override_config {
+        O311_POLLING_INTERVAL => 0,
+        O311_POLLING_MAX_TRIES => 1,
+    }, sub {
+        # mock POST Service Request that returns a (GUID) token
+        my $results = make_service_req(
+            $problem,
+            $extra,
+            $problem->category,
+            '<?xml version="1.0" encoding="utf-8"?><service_requests><request><token>' . $token . '</token></request></service_requests>',
+            { extended_description => 0 },
+        );
+
+        like $results->{ o }->error, qr/Timed out while trying to fetch service_request_id for token $token/, 'got correct error';
+    };
 };
 
 for my $test (
@@ -921,18 +976,12 @@ sub _make_req {
     my %open311_conf = %{ $args->{open311_conf} || {} };
     my @args         = @{ $args->{method_args} || [] };
 
-    $open311_conf{'test_mode'} = 1;
     $open311_conf{'end_point'} = 'http://localhost/o311';
     $open311_conf{fixmystreet_body} = $bromley;
     my $o =
       Open311->new( %open311_conf );
 
-    my $test_res = HTTP::Response->new();
-    $test_res->code(200);
-    $test_res->message('OK');
-    $test_res->content($xml);
-
-    $o->test_get_returns( { $path => $test_res } );
+    Open311->_inject_response($path, $xml);
 
     my $res = $o->$method($object, @args);
 

@@ -5,6 +5,7 @@ use Test::Warn;
 use DateTime;
 use Test::Output;
 use FixMyStreet::TestMech;
+use FixMyStreet::SendReport::Open311;
 use FixMyStreet::Script::Reports;
 use Open311::PostServiceRequestUpdates;
 my $mech = FixMyStreet::TestMech->new;
@@ -21,11 +22,11 @@ $uk->mock('_fetch_url', sub { '{}' });
 my $user = $mech->create_user_ok( 'bromley@example.com', name => 'Bromley' );
 my $body = $mech->create_body_ok( 2482, 'Bromley Council', {
     can_be_devolved => 1, send_extended_statuses => 1, comment_user => $user,
-    send_method => 'Open311', endpoint => 'e', jurisdiction => 'FMS', api_key => 'test', send_comments => 1
+    send_method => 'Open311', endpoint => 'http://endpoint.example.com', jurisdiction => 'FMS', api_key => 'test', send_comments => 1
 });
 my $staffuser = $mech->create_user_ok( 'staff@example.com', name => 'Staffie', from_body => $body );
 my $role = FixMyStreet::DB->resultset("Role")->create({
-    body => $body, name => 'Role A', permissions => ['moderate', 'user_edit', 'report_mark_private'] });
+    body => $body, name => 'Role A', permissions => ['moderate', 'user_edit', 'report_mark_private', 'report_inspect', 'contribute_as_body'] });
 $staffuser->add_to_roles($role);
 my $contact = $mech->create_contact_ok(
     body_id => $body->id,
@@ -116,6 +117,39 @@ subtest 'Check updates not sent for staff with no text' => sub {
     is $comment->get_extra_metadata('cobrand_skipped_sending'), 1, "skipped sending comment";
 };
 
+subtest 'Updates from staff with no text but with private comments are sent' => sub {
+    my $comment = FixMyStreet::DB->resultset('Comment')->find_or_create( {
+        problem_state => 'unable to fix',
+        problem_id => $report->id,
+        user_id    => $staffuser->id,
+        name       => 'User',
+        mark_fixed => 'f',
+        text       => "",
+        state      => 'confirmed',
+        confirmed  => 'now()',
+        anonymous  => 'f',
+    } );
+    $comment->unset_extra_metadata('cobrand_skipped_sending');
+    $comment->set_extra_metadata(private_comments => 'This comment has secret notes');
+    $comment->update;
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'bromley',
+    }, sub {
+        Open311->_inject_response('/servicerequestupdates.xml', '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>42</update_id></request_update></service_request_updates>');
+
+        my $updates = Open311::PostServiceRequestUpdates->new();
+        $updates->send;
+
+        $comment->discard_changes;
+        ok $comment->whensent, "comment was sent";
+        ok !$comment->get_extra_metadata('cobrand_skipped_sending'), "didn't skip sending comment";
+
+        my $req = Open311->test_req_used;
+        my $c = CGI::Simple->new($req->content);
+        like $c->param('description'), qr/Private comments: This comment has secret notes/, 'private comments included in update description';
+    };
+};
+
 for my $test (
     {
         desc => 'testing special Open311 behaviour',
@@ -158,25 +192,128 @@ for my $test (
         $report->set_extra_fields({ name => 'feature_id', value => $test->{feature_id} })
             if $test->{feature_id};
         $report->update;
-        my $test_data;
         FixMyStreet::override_config {
             STAGING_FLAGS => { send_reports => 1 },
             ALLOWED_COBRANDS => [ 'fixmystreet', 'bromley' ],
             MAPIT_URL => 'http://mapit.uk/',
         }, sub {
-            $test_data = FixMyStreet::Script::Reports::send();
+            FixMyStreet::Script::Reports::send();
         };
         $report->discard_changes;
         ok $report->whensent, 'Report marked as sent';
         is $report->send_method_used, 'Open311', 'Report sent via Open311';
         is $report->external_id, 248, 'Report has right external ID';
 
-        my $req = $test_data->{test_req_used};
+        my $req = Open311->test_req_used;
         my $c = CGI::Simple->new($req->content);
         is $c->param($_), $test->{expected}->{$_}, "Request had correct $_"
             for keys %{$test->{expected}};
     };
 }
+
+subtest 'ensure private_comments are added to open311 description' => sub {
+    $report->set_extra_metadata(private_comments => 'Secret notes go here');
+    $report->whensent(undef);
+    $report->update;
+
+    FixMyStreet::override_config {
+        STAGING_FLAGS => { send_reports => 1 },
+        ALLOWED_COBRANDS => [ 'fixmystreet', 'bromley' ],
+        MAPIT_URL => 'http://mapit.uk/',
+    }, sub {
+        FixMyStreet::Script::Reports::send();
+    };
+
+    $report->discard_changes;
+    ok $report->whensent, 'Report marked as sent';
+    unlike $report->detail, qr/Private comments/, 'private comments not saved to report detail';
+
+    my $req = Open311->test_req_used;
+    my $c = CGI::Simple->new($req->content);
+    like $c->param('description'), qr/Private comments: Secret notes go here/, 'private comments included in description';
+};
+
+subtest 'test waste duplicate' => sub {
+    my $sender = FixMyStreet::SendReport::Open311->new(
+        bodies => [ $body ], body_config => { $body->id => $body },
+    );
+    Open311->_inject_response('/requests.xml', '<?xml version="1.0" encoding="utf-8"?><errors><error><code></code><description>Missed Collection event already open for the property</description></error></errors>', 500);
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'bromley',
+    }, sub {
+        $sender->send($report, {
+            easting => 1,
+            northing => 2,
+            url => 'http://example.org/',
+        });
+    };
+    is $report->state, 'duplicate', 'State updated';
+};
+
+subtest 'test DD taking so long it expires' => sub {
+    my $title = $report->title;
+    $report->update({ title => "Garden Subscription - Renew" });
+    my $sender = FixMyStreet::SendReport::Open311->new(
+        bodies => [ $body ], body_config => { $body->id => $body },
+    );
+    Open311->_inject_response('/requests.xml', '<?xml version="1.0" encoding="utf-8"?><errors><error><code></code><description>Cannot renew this property, a new request is required</description></error></errors>', 500);
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'bromley',
+    }, sub {
+        $sender->send($report, {
+            easting => 1,
+            northing => 2,
+            url => 'http://example.org/',
+        });
+    };
+    is $report->get_extra_field_value("Subscription_Type"), 1, 'Type updated';
+    is $report->title, "Garden Subscription - New";
+    $report->update({ title => $title });
+};
+
+subtest 'Private comments on updates are added to open311 description' => sub {
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => ['bromley', 'tfl'],
+    }, sub {
+        $report->comments->delete;
+
+        Open311->_inject_response('/servicerequestupdates.xml', '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>42</update_id></request_update></service_request_updates>');
+
+        $mech->log_out_ok;
+        $mech->log_in_ok($staffuser->email);
+        $mech->host('bromley.fixmystreet.com');
+
+        $mech->get_ok('/report/' . $report->id);
+
+        $mech->submit_form_ok( {
+                with_fields => {
+                    submit_update => 1,
+                    update => 'Test',
+                    private_comments => 'Secret update notes',
+                    fms_extra_title => 'DR',
+                    first_name => 'Bromley',
+                    last_name => 'Council',
+                },
+            },
+            'update form submitted'
+        );
+
+        is $report->comments->count, 1, 'comment was added';
+        my $comment = $report->comments->first;
+        is $comment->get_extra_metadata('private_comments'), 'Secret update notes', 'private comments saved to comment';
+
+        my $updates = Open311::PostServiceRequestUpdates->new();
+        $updates->send;
+
+        $comment->discard_changes;
+        ok $comment->whensent, 'Comment marked as sent';
+        unlike $comment->text, qr/Private comments/, 'private comments not saved to update text';
+
+        my $req = Open311->test_req_used;
+        my $c = CGI::Simple->new($req->content);
+        like $c->param('description'), qr/Private comments: Secret update notes/, 'private comments included in update description';
+    };
+};
 
 for my $test (
     {
@@ -258,15 +395,18 @@ subtest 'check display of TfL and waste reports' => sub {
 
 subtest 'check staff can filter on waste reports' => sub {
     FixMyStreet::override_config {
-        ALLOWED_COBRANDS => 'bromley',
+        ALLOWED_COBRANDS => ['bromley', 'tfl'],
         MAPIT_URL => 'http://mapit.uk/',
     }, sub {
+        $mech->host('bromley.fixmystreet.com');
         $mech->get_ok( '/reports/Bromley');
         $mech->content_lacks('<optgroup label="Waste"');
 
         $mech->log_in_ok($staffuser->email);
         $mech->get_ok( '/reports/Bromley');
         $mech->content_contains('<optgroup label="Waste"');
+        $mech->get_ok( '/report/' . $report->id );
+        $mech->content_contains('<option value="Report missed collection">');
     };
 };
 
@@ -288,7 +428,7 @@ subtest 'check geolocation overrides' => sub {
 };
 
 subtest 'check special subcategories in admin' => sub {
-    $mech->create_user_ok('superuser@example.com', is_superuser => 1);
+    $mech->create_user_ok('superuser@example.com', is_superuser => 1, name => "Super User");
     $mech->log_in_ok('superuser@example.com');
     $user->update({ from_body => $body->id });
     FixMyStreet::override_config {
@@ -429,6 +569,21 @@ FixMyStreet::override_config {
         $mech->content_lacks('Request a replacement garden waste container');
     };
 
+    subtest 'test pending garden event' => sub {
+		my $echo = Test::MockModule->new('Integrations::Echo');
+        $echo->mock('GetEventsForObject', sub { [
+            {
+                Id => 123,
+                ServiceId => '545', # Garden waste
+                EventStateId => '14795', # Allocated to crew
+                EventTypeId => '2106', # Garden subscription
+            },
+        ] } );
+        $mech->get_ok('/waste/12345');
+        $mech->content_contains('You have a pending Garden Subscription');
+        $mech->content_lacks('Subscribe to Green Garden Waste');
+    };
+
 };
 
 subtest 'test waste max-per-day' => sub {
@@ -436,18 +591,20 @@ subtest 'test waste max-per-day' => sub {
         ALLOWED_COBRANDS => 'bromley',
         COBRAND_FEATURES => {
             echo => { bromley => {
-                max_requests_per_day => 3,
-                max_properties_per_day => 1,
                 sample_data => 1
             } },
             payment_gateway => { bromley => { ggw_cost => 1000 } },
+            waste_features => { bromley => {
+                max_requests_per_day => 3,
+                max_properties_per_day => 1,
+            } },
             waste => { bromley => 1 }
         },
     }, sub {
         SKIP: {
-            skip( "No memcached", 7 ) unless Memcached::set('bromley-waste-prop-test', 1);
-            Memcached::delete("bromley-waste-prop-test");
-            Memcached::delete("bromley-waste-req-test");
+            skip( "No memcached", 7 ) unless Memcached::set('waste-prop-test', 1);
+            Memcached::delete("waste-prop-test");
+            Memcached::delete("waste-req-test");
             $mech->get_ok('/waste/12345');
             $mech->get_ok('/waste/12345');
             $mech->get('/waste/12346');
@@ -926,36 +1083,6 @@ subtest 'check direct debit reconcilliation' => sub {
                 ] }
             } } } ];
         }
-        if ( $id == 8854321 ) {
-            return [ {
-                Id => 1005,
-                ServiceId => 545,
-                ServiceName => 'Garden waste collection',
-                ServiceTasks => { ServiceTask => {
-                    Id => 405,
-                    ScheduleDescription => 'every other Monday',
-                    Data => { ExtensibleDatum => '' },
-                    ServiceTaskSchedules => { ServiceTaskSchedule => [ {
-                        EndDate => { DateTime => '2020-01-01T00:00:00Z' },
-                        LastInstance => {
-                            OriginalScheduledDate => { DateTime => '2019-12-31T00:00:00Z' },
-                            CurrentScheduledDate => { DateTime => '2019-12-31T00:00:00Z' },
-                        },
-                    }, {
-                        EndDate => { DateTime => '2021-03-30T00:00:00Z' },
-                        NextInstance => {
-                            CurrentScheduledDate => { DateTime => '2020-06-01T00:00:00Z' },
-                            OriginalScheduledDate => { DateTime => '2020-06-01T00:00:00Z' },
-                        },
-                        LastInstance => {
-                            OriginalScheduledDate => { DateTime => '2020-05-18T00:00:00Z' },
-                            CurrentScheduledDate => { DateTime => '2020-05-18T00:00:00Z' },
-                            Ref => { Value => { anyType => [ 567, 890 ] } },
-                        },
-                    }
-                ] }
-            } } } ];
-        }
     });
 
     my $ad_hoc_orig = setup_dd_test_report({
@@ -1361,14 +1488,6 @@ subtest 'check direct debit reconcilliation' => sub {
         'uprn' => '654323',
     });
 
-    my $sub_for_cancel_no_extended_data = setup_dd_test_report({
-        'Subscription_Type' => 1,
-        'Subscription_Details_Quantity' => 1,
-        'payment_method' => 'direct_debit',
-        'property_id' => '8854321',
-        'uprn' => '6654326',
-    });
-
     # e.g if they tried to create a DD but the process failed
     my $failed_new_sub = setup_dd_test_report({
         'Subscription_Type' => 1,
@@ -1479,7 +1598,6 @@ subtest 'check direct debit reconcilliation' => sub {
         "no matching service to renew for GGW754322\n",
         "no matching record found for Garden Subscription payment with id GGW854324\n",
         "no matching record found for Garden Subscription payment with id GGW954325\n",
-        "no matching record found for Cancel payment with id GGW954326\n",
     ], "warns if no matching record";
 
     $new_sub->discard_changes;
@@ -1555,47 +1673,9 @@ subtest 'check direct debit reconcilliation' => sub {
     );
     is $renewal_too_recent->count, 0, "ignore payments less that three days old";
 
-    my $cancel = FixMyStreet::DB->resultset('Problem')->search({
-            extra => { like => '%uprn,T5:value,I6:654323%' }
-        },
-        {
-            order_by => { -desc => 'id' }
-        }
-    );
-
-    is $cancel->count, 2, "two records for cancel property";
-    $p = $cancel->first;
-    ok $p->id != $sub_for_cancel->id, "not the original record";
-    is $p->get_extra_field_value('Container_Instruction_Action'), 2, "correct containter instruction";
-    is $p->get_extra_field_value('Container_Instruction_Quantity'), 1, "cancel has correct number of bins";
-    is $p->category, 'Cancel Garden Subscription', 'cancel has correct category';
-    is $p->title, 'Garden Subscription - Cancel', 'cancel has correct title';
-    is $p->get_extra_metadata('dd_date'), "26/02/2021", "dd date set for cancelled";
-    is $p->get_extra_field_value('LastPayMethod'), 3, 'correct echo payment method field';
-    is $p->get_extra_field_value('PaymentCode'), "GGW654323", 'correct echo payment code field';
-    is $p->get_extra_field_value('Subscription_End_Date'), "2021-03-19", 'correct end subscription date';
-    is $p->state, 'confirmed';
-    ok $p->confirmed, "confirmed is not null";
-
-    my $cancel_no_extended = FixMyStreet::DB->resultset('Problem')->search({
-            extra => { like => '%uprn,T5:value,I7:6654326%' }
-        },
-        {
-            order_by => { -desc => 'id' }
-        }
-    );
-
-    is $cancel_no_extended->count, 2, "two records for no extended data cancel property";
-    $p = $cancel_no_extended->first;
-    ok $p->id != $sub_for_cancel_no_extended_data->id, "not the original record";
-    is $p->get_extra_field_value('Container_Instruction_Action'), 2, "correct containter instruction";
-    is $p->get_extra_field_value('Container_Instruction_Quantity'), 0, "no extended data cancel has correct number of bins";
-    is $p->category, 'Cancel Garden Subscription', 'no extended data cancel has correct category';
-    is $p->get_extra_metadata('dd_date'), "26/02/2021", "dd date set for no extended data cancelled";
-    is $p->get_extra_field_value('LastPayMethod'), 3, 'correct echo payment method field';
-    is $p->get_extra_field_value('PaymentCode'), "GGW6654326", 'correct echo payment code field';
-    is $p->state, 'confirmed';
-    ok $p->confirmed, "confirmed is not null";
+    my $cancel = FixMyStreet::DB->resultset('Problem')->search({ extra => { like => '%uprn,T5:value,I6:654323%' } }, { order_by => { -desc => 'id' } });
+    is $cancel->count, 1, "one record for cancel property";
+    is $cancel->first->id, $sub_for_cancel->id, "only record is the original one, no cancellation report created";
 
     my $processed = FixMyStreet::DB->resultset('Problem')->search({
             extra => { like => '%uprn,T5:value,I6:654324%' }
@@ -1631,7 +1711,6 @@ subtest 'check direct debit reconcilliation' => sub {
         "no matching service to renew for GGW754322\n",
         "no matching record found for Garden Subscription payment with id GGW854324\n",
         "no matching record found for Garden Subscription payment with id GGW954325\n",
-        "no matching record found for Cancel payment with id GGW954326\n",
     ], "warns if no matching record";
 
     $failed_new_sub->discard_changes;

@@ -63,7 +63,7 @@ sub disambiguate_location {
 sub send_questionnaires { return 0; }
 
 # increase map zoom level so street names are visible
-sub default_map_zoom { return 3; }
+sub default_map_zoom { 5 }
 
 # let staff hide OCC reports
 sub users_can_hide { return 1; }
@@ -155,7 +155,7 @@ sub open311_pre_send {
 }
 
 sub open311_post_send {
-    my ($self, $row, $h, $contact) = @_;
+    my ($self, $row, $h) = @_;
 
     $row->detail($self->{ox_original_detail});
 }

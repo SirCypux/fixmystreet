@@ -178,12 +178,8 @@ sub updates_as_hashref {
     if ($self->problem_has_public_response($problem)) {
         $hashref->{update_pp} = $self->prettify_dt( $problem->lastupdate );
 
-        if ( $problem->state ne 'external' ) {
-            $hashref->{details} = FixMyStreet::Template::add_links(
-                $problem->get_extra_metadata('public_response') || '' );
-        } else {
-            $hashref->{details} = sprintf( _('Assigned to %s'), $problem->body->name );
-        }
+        $hashref->{details} = FixMyStreet::Template::add_links(
+            $problem->get_extra_metadata('public_response') || '' );
     }
 
     return $hashref;
@@ -1295,7 +1291,7 @@ sub export_as_csv {
             'Interne meldung',
         ],
         csv_columns => [
-            'id', 'created', 'whensent',' lastupdate', 'local_coords_x',
+            'id', 'created', 'whensent', 'lastupdate', 'local_coords_x',
             'local_coords_y', 'category', 'state', 'closure_status',
             'user_id', 'user_email', 'user_phone', 'user_name',
             'body_name', 'sum_time_spent', 'title', 'detail',

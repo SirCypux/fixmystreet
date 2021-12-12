@@ -229,7 +229,7 @@ sub cobrand_name {
     # Bromley Council" when making a report within Westminster on the TfL
     # cobrand.
     # If the current body is TfL then we always want to show TfL as the cobrand name.
-    return $self->name if $self->name eq 'TfL' || $self->name eq 'Highways England' || $self->name eq 'Environment Agency';
+    return $self->name if $self->name eq 'TfL' || $self->name eq 'National Highways' || $self->name eq 'Environment Agency';
 
     my $handler = $self->get_cobrand_handler;
     if ($handler && $handler->can('council_name')) {
@@ -278,6 +278,24 @@ sub calculate_average {
     my $count = $result->get_column('count');
 
     return $count >= $threshold ? $avg : undef;
+}
+
+=head2 staff_with_permission
+
+Returns a resultset of all staff users for the body who have been
+granted a specific permission.
+
+=cut
+
+sub staff_with_permission {
+    my ( $self, $permission ) = @_;
+    return $self->users->search([
+        { 'user_body_permissions.permission_type' => $permission },
+        { permissions => \"@> ARRAY['$permission']" }
+    ], {
+        join => [ 'user_body_permissions', { "user_roles" => "role" } ],
+        order_by => { '-asc' => ['name'] },
+    });
 }
 
 1;

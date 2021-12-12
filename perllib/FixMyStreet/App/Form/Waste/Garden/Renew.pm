@@ -12,8 +12,8 @@ my %intro_fields = (
         my $form = shift;
         my $c = $form->{c};
         $c->stash->{per_bin_cost} = $c->cobrand->garden_waste_cost;
-        my $current_bins = $c->get_param('current_bins') || $c->stash->{garden_form_data}->{bins};
-        $c->stash->{payment} = $c->cobrand->garden_waste_cost( $current_bins ) / 100;
+        my $bins_wanted = $c->get_param('bins_wanted') || $form->saved_data->{bins_wanted} || $c->stash->{garden_form_data}->{bins};
+        $c->stash->{payment} = $c->cobrand->garden_waste_cost( $bins_wanted ) / 100;
         return {
             current_bins => { default => $c->stash->{garden_form_data}->{bins} },
             bins_wanted => { default => $c->stash->{garden_form_data}->{bins} },
@@ -50,7 +50,6 @@ has_page summary => (
         if ( $orig_sub ) {
             $data->{billing_address} = $orig_sub->get_extra_field_value('billing_address');
         }
-        $data->{bin_number} = $bins_wanted;
         $data->{billing_address} ||= $c->stash->{property}{address};
         $data->{display_total} = $total / 100;
 
@@ -77,13 +76,14 @@ has_field current_bins => (
     label => 'Number of bins currently on site',
     tags => { number => 1 },
     required => 1,
+    disabled => 1,
     range_start => 1,
     range_end => 6,
 );
 
 has_field bins_wanted => (
     type => 'Integer',
-    label => 'Number of bins to collect (including bins already on site)',
+    label => 'Number of bins to be emptied (including bins already on site)',
     tags => { number => 1 },
     required => 1,
     range_start => 1,

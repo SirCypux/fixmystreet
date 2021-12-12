@@ -6,6 +6,7 @@ BEGIN { extends 'Catalyst::Controller' }
 
 use utf8;
 use Lingua::EN::Inflect qw( NUMWORDS );
+use List::Util qw(any);
 use FixMyStreet::App::Form::Waste::UPRN;
 use FixMyStreet::App::Form::Waste::AboutYou;
 use FixMyStreet::App::Form::Waste::Request;
@@ -18,6 +19,7 @@ use FixMyStreet::App::Form::Waste::Garden::Renew;
 use Open311::GetServiceRequestUpdates;
 use Integrations::SCP;
 use Digest::MD5 qw(md5_hex);
+use Memcached;
 
 sub auto : Private {
     my ( $self, $c ) = @_;
@@ -32,6 +34,10 @@ sub auto : Private {
         $features->{garden_disabled} = 1;
     }
 
+    if ( my $site_name = Utils::trim_text($c->render_fragment('waste/site-name.html')) ) {
+        $c->stash->{site_name} = $site_name;
+    }
+
     $c->cobrand->call_hook( 'waste_check_staff_payment_permissions' );
 
     return 1;
@@ -41,9 +47,12 @@ sub index : Path : Args(0) {
     my ( $self, $c ) = @_;
 
     if (my $id = $c->get_param('address')) {
-        $c->cobrand->call_hook( clear_cached_lookups => $id );
+        $c->cobrand->call_hook( clear_cached_lookups_property => $id );
         $c->detach('redirect_to_id', [ $id ]);
     }
+
+    $c->cobrand->call_hook( clear_cached_lookups_postcode => $c->get_param('postcode') )
+        if $c->get_param('postcode');
 
     $c->stash->{title} = 'What is your address?';
     my $form = FixMyStreet::App::Form::Waste::UPRN->new( cobrand => $c->cobrand );
@@ -136,7 +145,7 @@ sub get_pending_subscription : Private {
         }
 
     }
-    $c->stash->{pending_subscription} = $new;
+    $c->stash->{pending_subscription} ||= $new;
     $c->stash->{pending_cancellation} = $cancel;
 }
 
@@ -488,7 +497,7 @@ sub property : Chained('/') : PathPart('waste') : CaptureArgs(1) {
 
     # clear this every time they visit this page to stop stale content.
     if ( $c->req->path =~ m#^waste/\d+$# ) {
-        $c->cobrand->call_hook( clear_cached_lookups => $id );
+        $c->cobrand->call_hook( clear_cached_lookups_property => $id );
     }
 
     my $property = $c->stash->{property} = $c->cobrand->call_hook(look_up_property => $id);
@@ -508,7 +517,41 @@ sub bin_days : Chained('property') : PathPart('') : Args(0) {
     my ($self, $c) = @_;
 
     my $staff = $c->user_exists && ($c->user->is_superuser || $c->user->from_body);
-    $c->cobrand->call_hook(waste_bin_days_check => $staff);
+
+    my $cfg = $c->cobrand->feature('waste_features');
+
+    return if $staff || (!$cfg->{max_requests_per_day} && !$cfg->{max_properties_per_day});
+
+    # Allow lookups of max_per_day different properties per day
+    my $today = DateTime->today->set_time_zone(FixMyStreet->local_time_zone)->ymd;
+    my $ip = $c->req->address;
+
+    if ($cfg->{max_requests_per_day}) {
+        my $key = FixMyStreet->test_mode ? "waste-req-test" : "waste-req-$ip-$today";
+        my $count = Memcached::increment($key, 86400) || 0;
+        $c->detach('bin_day_deny') if $count > $cfg->{max_requests_per_day};
+    }
+
+    # Allow lookups of max_per_day different properties per day
+    if ($cfg->{max_properties_per_day}) {
+        my $key = FixMyStreet->test_mode ? "waste-prop-test" : "waste-prop-$ip-$today";
+        my $list = Memcached::get($key) || [];
+
+        my $id = $c->stash->{property}->{id};
+        return if any { $_ == $id } @$list; # Already visited today
+
+        $c->detach('bin_day_deny') if @$list >= $cfg->{max_properties_per_day};
+
+        push @$list, $id;
+        Memcached::set($key, $list, 86400);
+    }
+}
+
+sub bin_day_deny : Private {
+    my ($self, $c) = @_;
+    my $council = $c->cobrand->council_area;
+    my $msg = "Please note that for security and privacy reasons $council have limited the number of different properties you can look up on the waste collection schedule in a 24-hour period.  You should be able to continue looking up against properties you have already viewed.  For other locations please try again after 24 hours.  If you are still seeing this message after that time please try refreshing the page.";
+    $c->detach('/page_error_403_access_denied', [ $msg ]);
 }
 
 sub calendar : Chained('property') : PathPart('calendar.ics') : Args(0) {
@@ -555,7 +598,8 @@ sub construct_bin_request_form {
     my $field_list = [];
 
     foreach (@{$c->stash->{service_data}}) {
-        next unless $_->{next} && !$_->{request_open};
+        next unless ( $_->{next} && !$_->{request_open} ) || $_->{request_only};
+        my $service = $_;
         my $name = $_->{service_name};
         my $containers = $_->{request_containers};
         my $max = $_->{request_max};
@@ -595,6 +639,7 @@ sub construct_bin_request_form {
                     required_when => { "container-$id" => 1 },
                 };
             }
+            $c->cobrand->call_hook("bin_request_form_extra_fields", $service, $id, $field_list);
         }
     }
 
@@ -626,6 +671,7 @@ sub request : Chained('property') : Args(0) {
 sub process_request_data : Private {
     my ($self, $c, $form) = @_;
     my $data = $form->saved_data;
+    $c->cobrand->call_hook("waste_munge_request_form_data", $data);
     my @services = grep { /^container-/ && $data->{$_} } sort keys %$data;
     my @reports;
     foreach (@services) {
@@ -654,7 +700,7 @@ sub construct_bin_report_form {
     my $field_list = [];
 
     foreach (@{$c->stash->{service_data}}) {
-        next unless $_->{last} && $_->{report_allowed} && !$_->{report_open};
+        next unless ( $_->{last} && $_->{report_allowed} && !$_->{report_open}) || $_->{report_only};
         my $id = $_->{service_id};
         my $name = $_->{service_name};
         push @$field_list, "service-$id" => {
@@ -663,6 +709,8 @@ sub construct_bin_report_form {
             option_label => $name,
         };
     }
+
+    $c->cobrand->call_hook("waste_munge_report_form_fields", $field_list);
 
     return $field_list;
 }
@@ -688,6 +736,7 @@ sub report : Chained('property') : Args(0) {
 sub process_report_data : Private {
     my ($self, $c, $form) = @_;
     my $data = $form->saved_data;
+    $c->cobrand->call_hook("waste_munge_report_form_data", $data);
     my @services = grep { /^service-/ && $data->{$_} } sort keys %$data;
     my @reports;
     foreach (@services) {
@@ -734,7 +783,12 @@ sub enquiry : Chained('property') : Args(0) {
         };
     }
 
-    $c->stash->{first_page} = 'enquiry';
+    # If the contact has no extra fields (e.g. Peterborough) then skip to the
+    # "about you" page instead of showing an empty first page.
+    # NB this will mean you need to set $data->{category} in the cobrand's
+    # waste_munge_enquiry_data.
+    $c->stash->{first_page} = @$field_list ? 'enquiry' : 'about_you';
+
     $c->stash->{form_class} = 'FixMyStreet::App::Form::Waste::Enquiry';
     $c->stash->{page_list} = [
         enquiry => {
@@ -751,6 +805,7 @@ sub enquiry : Chained('property') : Args(0) {
             }
         },
     ];
+    $c->cobrand->call_hook("waste_munge_enquiry_form_fields", $field_list);
     $c->stash->{field_list} = $field_list;
     $c->forward('form');
 }
@@ -990,7 +1045,7 @@ sub get_original_sub : Private {
 
     my $p = $c->model('DB::Problem')->search({
         category => 'Garden Subscription',
-        title => 'Garden Subscription - New',
+        title => ['Garden Subscription - New', 'Garden Subscription - Renew'],
         extra => { like => '%property_id,T5:value,I_:'. $c->stash->{property}{id} . '%' },
         state => { '!=' => 'hidden' },
     },
@@ -1053,17 +1108,17 @@ sub process_garden_modification : Private {
     $data->{title} = 'Garden Subscription - Amend';
     $c->set_param('Subscription_Type', $c->stash->{garden_subs}->{Amend});
 
-    my $new_bins = $data->{bin_number} - $c->stash->{garden_form_data}->{bins};
+    my $new_bins = $data->{bins_wanted} - $data->{current_bins};
 
     $data->{new_bins} = $new_bins;
-    $data->{bin_count} = $data->{bin_number};
+    $data->{bin_count} = $data->{bins_wanted};
 
     my $pro_rata;
     if ( $new_bins > 0 ) {
         $pro_rata = $c->cobrand->waste_get_pro_rata_cost( $new_bins, $c->stash->{garden_form_data}->{end_date});
         $c->set_param('pro_rata', $pro_rata);
     }
-    my $payment = $c->cobrand->garden_waste_cost($data->{bin_number});
+    my $payment = $c->cobrand->garden_waste_cost($data->{bins_wanted});
     $c->set_param('payment', $payment);
 
     $c->forward('setup_garden_sub_params', [ $data ]);
@@ -1249,6 +1304,16 @@ sub add_report : Private {
     $c->stash->{cobrand_data} = 'waste';
     $c->stash->{override_confirmation_template} = 'waste/confirmation.html';
 
+    # Store the name of the first page of the wizard on the token
+    # so Peterborough can show the appropriate confirmation page when the
+    # confirmation link is followed.
+    $c->stash->{token_extra_data} = {
+        first_page => $c->stash->{first_page},
+    };
+
+    # Don’t let staff inadvertently change their name when making reports
+    my $original_name = $c->user->name if $c->user_exists && $c->user->from_body && $c->user->email eq $data->{email};
+
     # XXX Is this best way to do this?
     if ($c->user_exists && $c->user->from_body && !$data->{email} && !$data->{phone}) {
         $c->set_param('form_as', 'anonymous_user');
@@ -1287,7 +1352,9 @@ sub add_report : Private {
         $c->forward('/report/new/redirect_or_confirm_creation');
     }
 
-    $c->cobrand->call_hook( clear_cached_lookups => $c->stash->{property}{id} );
+    $c->user->update({ name => $original_name }) if $original_name;
+
+    $c->cobrand->call_hook( clear_cached_lookups_property => $c->stash->{property}{id} );
 
     return 1;
 }
@@ -1308,8 +1375,6 @@ sub setup_categories_and_bodies : Private {
     $c->stash->{area_check_action} = 'submit_problem';
     $c->forward('/council/load_and_check_areas', []);
     $c->forward('/report/new/setup_categories_and_bodies');
-    my $contacts = $c->stash->{contacts};
-    @$contacts = grep { grep { $_ eq 'Waste' } @{$_->groups} } @$contacts;
 }
 
 sub receive_echo_event_notification : Path('/waste/echo') : Args(0) {

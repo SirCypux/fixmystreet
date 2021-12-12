@@ -793,6 +793,7 @@ sub available_permissions {
             contribute_as_body => _("Create reports/updates as the council"),
             default_to_body => _("Default to creating reports/updates as the council"),
             view_body_contribute_details => _("See user detail for reports created as the council"),
+            assign_report_to_user => _("Assign problem reports to users"),
         },
         _("Users") => {
             user_edit => _("Edit users' details/search for their reports"),
@@ -1381,6 +1382,19 @@ sub emergency_message {
 # Report if cobrand denies updates by user
 # Default 'allows'
 sub deny_updates_by_user {
+    return;
+}
+
+=item report_a_problem_link
+
+Cobrand-specific option for the 'Report a problem here' link displayed in the
+top left-hand corner of the page after a problem report.
+
+Default is empty string (false).
+
+=cut
+
+sub post_report_report_problem_link {
     return;
 }
 

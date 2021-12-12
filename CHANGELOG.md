@@ -1,6 +1,6 @@
 ## Releases
 
-* Unreleased
+* v4.0 (3rd December 2021)
     - Front end improvements:
         - Multi-page form reporting.
         - New aerial map toggle.
@@ -14,6 +14,11 @@
         - Update URL on /my when map moves. #3358
         - Make anonymous updates clearer in email alerts. #3417
         - Add Maidenhead Locator support to search box.
+        - Update RSS link when distance box changed. #3624
+        - Inspector-managers can assign reports to inspectors
+          in the inspector toolbar.
+        - Inspectors & inspector-managers can see who a report is assigned
+          to or 'unassigned' if a report is unassigned.
     - Bugfixes:
         - Fix non-JS form when all extra questions answered. #3248
         - Improve display of disabled fields in iOS.
@@ -26,7 +31,15 @@
         - Only trigger one refresh going Back to list view. #3476
         - Fix checked order of updates in dashboard export.
         - Fix unable to edit user with verified landline #3295
+        - Fix 'sites' page to reflect active fixmystreet sites #2481
+        - Fix ordering of dropdown lists in extra questions #3566
+        - Fix removal of cached opengraph photos.
+        - Do not email inactive body comment users. #3587
+        - Look up organizational domain in DMARC checking. #3603
+        - Stop slash in category name breaking csv download #3642
+        - Fix CSS z-index bug that resulted in the main menu being hidden behind the map on small screens #3686
     - Admin improvements:
+        - Assignees of reports are now visible in admin reports list and report edit pages.
         - Enable per-category hint customisation.
         - Move ban/unban buttons to user edit admin page.
         - Add link to user edit admin from report/update edit admin.
@@ -40,15 +53,22 @@
         - Redaction support for photos.
         - UK Councils no questionnaires for non-updating users
         - Script to export/import response templates, #3549
+        - Include non-public report in front page search for staff. #3616
+        - Include staff categories in map filters for staff. #3616
     - Development improvements:
         - Include failure count in send report error output, #3316
         - Sort output in export script. #3323
         - Show relevant updates in alert-update email preview. #3417
-        - Upgrade jQuery. #3017
+        - Upgrade jQuery to 3.6.0. #3017
+        - Upgrade Mozilla::CA to handle new root certificates.
+        - Factor alert script to slightly smaller functions. #3615
+        - Add development Docker environment.
     - Open311 improvements:
         - Consistent protected field ordering.
+        - Move test handling out of core code.
     - Security:
         - Increase minimum password length to eight.
+        - Allow throttling by user login attempts
     - Changes
         - Send contact form emails from do-not-reply address if sender's domain uses DMARC.
 

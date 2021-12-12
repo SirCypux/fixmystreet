@@ -1,5 +1,3 @@
-User-agent: msnbot
-Crawl-delay: 3
-
-User-agent: bingbot
+User-agent: *
+Disallow: /photo/
 Crawl-delay: 3

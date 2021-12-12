@@ -41,9 +41,9 @@ $r = $he->geocode_postcode('m1');
 ok $r->{error}, "searching for lowecase road only generates error";
 
 my $mech = FixMyStreet::TestMech->new;
-my $highways = $mech->create_body_ok(2234, 'Highways England', { send_method => 'Email::Highways' });
+my $highways = $mech->create_body_ok(2234, 'National Highways', { send_method => 'Email::Highways' });
 
-$mech->create_contact_ok(email => 'highways@example.com', body_id => $highways->id, category => 'Pothole', group => 'Highways England');
+$mech->create_contact_ok(email => 'highways@example.com', body_id => $highways->id, category => 'Pothole', group => 'National Highways');
 
 FixMyStreet::override_config {
     ALLOWED_COBRANDS => 'highwaysengland',
@@ -83,7 +83,7 @@ FixMyStreet::override_config {
         my $body = $mech->get_text_body_from_email($email);
         like $body, qr/Heard from: Facebook/, 'where hear included in email';
         like $body, qr/Road: M1/, 'road data included in email';
-
+        like $body, qr/Area: Area 1/, 'area data included in email';
     };
 
     my ($problem) = $mech->create_problems_for_body(1, $highways->id, 'Title');

@@ -175,6 +175,7 @@ recommends 'Mac::FSEvents' if $^O eq 'darwin';
 # Modules used by the test suite
 requires 'Test::PostgreSQL', '1.27';
 requires 'CGI::Simple';
+requires 'HTML::Selector::Element';
 requires 'HTTP::Headers';
 requires 'HTTP::Response';
 requires 'LWP::Protocol::PSGI';
@@ -191,7 +192,7 @@ requires 'Web::Scraper';
 requires 'Web::Simple';
 
 # Default root certificates used by LWP::UserAgent
-requires 'Mozilla::CA', '20200520';
+requires 'Mozilla::CA', '20211001';
 
 #################################################################
 # [1] Params::Classify 0.13 installs XS, but 0.15 will only do so
